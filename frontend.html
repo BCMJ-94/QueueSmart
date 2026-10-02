@@ -1,1 +1,73 @@
+// User joins a queue
 
+function join(id){ const s = svc(id); s.q.push('You'); S.my = id; notify('You joined ' + s.name + '. Position #' + pos(s)); render(); }
+ 
+// User leaves their queue -> saved to history
+
+function leave(){
+
+  const s = svc(S.my);
+
+  s.q = s.q.filter(n => n != 'You');
+
+  S.hist.unshift({d: today(), s: s.name, o: 'Left queue'});
+
+  S.my = null; toast('You left the queue'); render();
+
+}
+ 
+// Serve the next person. If that was "You", status becomes Served; if You are now first, "almost ready"
+
+function serve(id){
+
+  const s = svc(id), n = s.q.shift();
+
+  if(n == 'You'){ S.hist.unshift({d: today(), s: s.name, o: 'Served'}); S.my = null; notify('Status: Served. Thank you! 💖'); }
+
+  else if(n && pos(s) == 1) notify('Almost ready - you are next in ' + s.name + '!');
+
+  else if(n) notify('Queue updated: ' + n + ' was served.');
+
+  render();
+
+}
+ 
+// Admin opens/closes a queue
+
+function tog(id){ const s = svc(id); s.open = !s.open; notify(s.name + ' queue ' + (s.open ? 'opened' : 'closed')); render(); }
+ 
+// Admin reorders (swap with neighbor) or removes a person
+
+function mv(i, d){ const q = svc(S.qsel).q; [q[i], q[i+d]] = [q[i+d], q[i]]; render(); }
+
+function rm(i){ const s = svc(S.qsel), n = s.q.splice(i, 1)[0]; if(n == 'You'){ S.my = null; notify('You were removed from ' + s.name); } render(); }
+ 
+// Service form validation: name required + max 100, description required, duration whole number 1-480
+
+function saveSvc(e){
+
+  e.preventDefault();
+
+  const n = $('#sn').value.trim(), d = $('#sd').value.trim(), u = $('#su').value;
+
+  let ok = true;
+
+  const set = (i, m) => { $(i).textContent = m; if(m) ok = false; };
+
+  set('#s1', !n ? 'Name is required.' : n.length > 100 ? 'Max 100 characters.' : '');
+
+  set('#s2', !d ? 'Description is required.' : '');
+
+  set('#s3', !u ? 'Duration is required.' : !(+u >= 1 && +u <= 480) || !Number.isInteger(+u) ? 'Enter a whole number, 1-480.' : '');
+
+  if(!ok) return false;
+
+  const p = $('#sp').value;
+
+  if(S.edit && S.edit.id) Object.assign(svc(S.edit.id), {name: n, desc: d, dur: +u, pri: p});          // update existing
+
+  else S.svcs.push({id: Date.now(), name: n, desc: d, dur: +u, pri: p, open: true, q: []});             // create new
+
+  S.edit = null; toast('Service saved ✨'); render(); return false;
+
+}
