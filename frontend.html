@@ -1,4 +1,93 @@
-// ---------- NAVIGATION ----------
+<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>QueueSmart ✨</title>
+<!-- Cute rounded font. If offline, the browser falls back to system fonts. -->
+<link href="https://fonts.googleapis.com/css2?family=Quicksand:wght@500;600;700&display=swap" rel="stylesheet">
+<style>
+/* ===== THEME: soft pastel colors ===== */
+:root{--bg1:#ffeef5;--bg2:#eef0ff;--card:#ffffffcc;--tx:#4a3f5c;--mu:#9a8fae;--pr:#b48cf2;--pk:#ff9ec7;
+--mint:#7fd8b8;--bd:#f1dcf5;--er:#e5537a;--wn:#f0a04b;--sh:0 8px 24px #b48cf233}
+*{box-sizing:border-box}
+body{margin:0;font:600 15px Quicksand,system-ui,sans-serif;color:var(--tx);
+ background:linear-gradient(135deg,var(--bg1),var(--bg2)) fixed;min-height:100vh}
+
+/* ===== LAYOUT: top bar, nav pills, centered content ===== */
+header{display:flex;align-items:center;gap:12px;padding:12px 20px;background:var(--card);
+ backdrop-filter:blur(8px);border-bottom:2px dashed var(--bd);flex-wrap:wrap}
+header b{font-size:20px;color:var(--pr)}
+nav{display:flex;gap:6px;flex-wrap:wrap;flex:1}
+main{max-width:960px;margin:20px auto;padding:0 16px}
+
+/* ===== CARDS, BUTTONS, FORMS ===== */
+.card{background:var(--card);border:2px solid var(--bd);border-radius:24px;padding:20px;margin-bottom:16px;box-shadow:var(--sh)}
+.btn,nav button{font:inherit;border:2px solid var(--bd);background:#fff;color:var(--tx);padding:7px 15px;
+ border-radius:99px;cursor:pointer;transition:transform .15s}
+.btn:hover,nav button:hover{transform:translateY(-2px)}
+.btn.p,nav button.on{background:linear-gradient(135deg,var(--pk),var(--pr));color:#fff;border-color:transparent}
+.btn.d{color:var(--er)}.btn:disabled{opacity:.45;cursor:default;transform:none}
+h2{margin:0 0 14px;font-size:24px}h3{margin:0 0 8px}
+label{display:block;margin:12px 0 4px}
+input,select,textarea{width:100%;padding:10px 14px;border:2px solid var(--bd);border-radius:16px;background:#fff;color:var(--tx);font:inherit}
+input:focus,select:focus,textarea:focus{outline:none;border-color:var(--pr)}
+.err{color:var(--er);font-size:13px;min-height:16px}   /* validation messages */
+.mu{color:var(--mu);font-size:13px}
+
+/* ===== TABLES, BADGES, MISC ===== */
+table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:9px;border-bottom:2px dotted var(--bd)}
+.badge{padding:3px 11px;border-radius:99px;font-size:12px;background:#fff;border:2px solid var(--bd)}
+.high{color:var(--er)}.medium{color:var(--wn)}.low,.open{color:#2fa57f}   /* priority + open colors */
+.big{font-size:46px;font-weight:700;color:var(--pr)}                      /* big queue number */
+.grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));gap:16px}
+.row{display:flex;gap:8px;align-items:center;flex-wrap:wrap}.sp{flex:1}
+#bell{position:relative}
+#bell i{position:absolute;top:-6px;right:-4px;background:var(--er);color:#fff;border-radius:99px;font-size:11px;padding:1px 6px;font-style:normal}
+#toast{position:fixed;bottom:20px;right:20px;background:var(--pr);color:#fff;padding:11px 18px;border-radius:99px;display:none;box-shadow:var(--sh)}
+.auth{max-width:390px;margin:50px auto;text-align:center}.auth form{text-align:left}
+.tabs{display:flex;gap:8px;justify-content:center;margin-bottom:8px}
+</style></head><body>
+<div id="root"></div><div id="toast"></div>
+
+<script>
+/* ==========================================================
+   QueueSmart front-end (A2) - plain HTML/CSS/JS, mock data only
+   No backend: everything lives in the object "S" below and
+   the screen is redrawn by render() whenever S changes.
+   ========================================================== */
+
+// Small helpers: $ finds an element, now() gives a readable timestamp
+const $ = s => document.querySelector(s), now = () => new Date().toLocaleString();
+
+// ---------- MOCK DATA / APP STATE ----------
+const S = {
+  role: null,          // null = logged out, 'user' or 'admin'
+  email: '',
+  view: 'login',       // which screen is showing
+  auth: 'login',       // login/register tab
+  my: null,            // id of the service the user is queued in
+  showN: false,        // is the notification panel open?
+  unread: 2,           // unread notification count
+  qsel: 1,             // service selected in Queue Management
+  edit: null,          // service being edited (null = creating new)
+  svcs: [              // each service: name, description, minutes per person, priority, open flag, queue of names
+    {id:1, name:'General Consultation', desc:'Standard doctor visit', dur:15, pri:'medium', open:true, q:['Ava M.','Ben R.','Chloe T.']},
+    {id:2, name:'Urgent Care', desc:'Time-sensitive issues', dur:10, pri:'high', open:true, q:['Dan K.']},
+    {id:3, name:'Music Lesson', desc:'30 minute private lesson', dur:30, pri:'low', open:false, q:[]}
+  ],
+  hist: [
+    {d:'2026-09-12', s:'General Consultation', o:'Served'},
+    {d:'2026-08-30', s:'Music Lesson', o:'Left queue'}
+  ],
+  notes: [{m:'Welcome to QueueSmart! 🎀', t:'Today'}, {m:'Urgent Care queue is now open.', t:'Today'}]
+};
+
+// Find a service by id, and find "You" in its queue (1-based position, 0 = not in queue)
+const svc = id => S.svcs.find(x => x.id == id);
+const pos = s => s.q.indexOf('You') + 1;
+const today = () => new Date().toISOString().slice(0, 10);
+
+// ---------- NOTIFICATIONS (in-app only) ----------
+function toast(m){ const t = $('#toast'); t.textContent = m; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 2500); }
+function notify(m){ S.notes.unshift({m, t: now()}); S.unread++; toast(m); }   // saves it AND pops a toast// ---------- NAVIGATION ----------
 function go(v){ S.view = v; S.showN = false; render(); }
 const USER_NAV  = [['dash','🏠 Dashboard'],['join','🎟️ Join Queue'],['status','⏳ Status'],['hist','📖 History']];
 const ADMIN_NAV = [['adash','🏠 Dashboard'],['svcm','🧸 Services'],['qm','📋 Queues']];
@@ -196,3 +285,6 @@ function saveSvc(e){
   S.edit = null; toast('Service saved ✨'); render(); return false;
 
 }
+
+render();   // first draw: shows the login screen
+</script></body></html>
