@@ -51,6 +51,78 @@ function doAuth(){
  }
 }
 
+// ---------- VIEWS: each function returns the HTML for one screen ----------
+const V = {
+ // USER: dashboard = my queue + notification summary + active services
+ dash(){ return `<h2>Hi there! 🌸</h2>
+<div class="grid">
+<div class="card"><h3>Your queue</h3>
+       ${S.my ? `<div class="big">#${pos(svc(S.my))}</div><div class="mu">${svc(S.my).name}</div>` : '<p class="mu">Not in a queue yet.</p>'}
+<button class="btn" onclick="go('status')">View status</button></div>
+<div class="card"><h3>Notifications</h3>${S.notes.slice(0,3).map(n => `<div>• ${n.m}</div>`).join('')}</div>
+</div>
+<div class="card"><h3>Active services</h3><table><tr><th>Service</th><th>Waiting</th><th>Est. wait</th><th>Status</th></tr>
+     ${S.svcs.map(s => `<tr><td>${s.name}</td><td>${s.q.length}</td><td>${s.q.length * s.dur} min</td><td class="${s.open?'open':''}">${s.open?'Open':'Closed'}</td></tr>`).join('')}</table></div>`; },
+ // USER: pick a service, see estimated wait, join or leave
+ join(){ return `<h2>Join a Queue 🎟️</h2>` + S.svcs.map(s => {
+     const inq = S.my == s.id;
+     const est = inq ? (pos(s) * s.dur) : (s.q.length + 1) * s.dur;      // wait if you join now / your current wait
+     return `<div class="card row"><div class="sp">
+<h3>${s.name} <span class="badge ${s.pri}">${s.pri}</span></h3>
+<div class="mu">${s.desc} · ${s.dur} min each</div>
+<div>Estimated wait: <b>${est} min</b> (${s.q.length} waiting)</div></div>
+       ${inq ? `<button class="btn d" onclick="leave()">Leave queue</button>`
+             : `<button class="btn p" ${!s.open || S.my ? 'disabled' : ''} onclick="join(${s.id})">${s.open ? 'Join' : 'Closed'}</button>`}
+</div>`; }).join('') + (S.my ? '<p class="mu">You can only be in one queue at a time.</p>' : ''); },
+ // USER: current position, wait time, status (waiting / almost ready)
+ status(){
+   if(!S.my) return `<h2>Queue Status ⏳</h2><div class="card">You are not in a queue. <button class="btn p" onclick="go('join')">Join one</button></div>`;
+   const s = svc(S.my), p = pos(s), st = p == 1 ? ['Almost ready 💛','medium'] : ['Waiting 💤',''];
+   return `<h2>Queue Status ⏳</h2><div class="card"><h3>${s.name}</h3><div class="big">#${p}</div>
+<p>Estimated wait: <b>${p * s.dur} min</b></p>
+<p>Status: <span class="badge ${st[1]}">${st[0]}</span></p>
+<p class="mu">Waiting → Almost ready → Served</p>
+<button class="btn p" onclick="serve(${s.id})">Simulate: serve next</button>
+<button class="btn d" onclick="leave()">Leave queue</button></div>`; },
+ // USER: past queues (date, service, outcome)
+ hist(){ return `<h2>History 📖</h2><div class="card"><table><tr><th>Date</th><th>Service</th><th>Outcome</th></tr>
+   ${S.hist.map(h => `<tr><td>${h.d}</td><td>${h.s}</td><td>${h.o}</td></tr>`).join('')}</table></div>`; },
+ // ADMIN: services, queue lengths, open/close quick action
+ adash(){ return `<h2>Admin Dashboard 🏠</h2><div class="card"><table><tr><th>Service</th><th>Queue length</th><th>Status</th><th>Action</th></tr>
+   ${S.svcs.map(s => `<tr><td>${s.name}</td><td>${s.q.length}</td><td class="${s.open?'open':''}">${s.open?'Open':'Closed'}</td>
+<td><button class="btn" onclick="tog(${s.id})">${s.open?'Close':'Open'} queue</button></td></tr>`).join('')}</table></div>`; },
+ // ADMIN: create / edit services (with validation in saveSvc)
+ svcm(){
+   const e = S.edit || {name:'', desc:'', dur:'', pri:'medium'};      // blank form when creating
+   return `<h2>Service Management 🧸</h2>
+<div class="card"><table><tr><th>Service</th><th>Duration</th><th>Priority</th><th></th></tr>
+     ${S.svcs.map(s => `<tr><td>${s.name}</td><td>${s.dur} min</td><td class="${s.pri}">${s.pri}</td>
+<td><button class="btn" onclick="S.edit={...svc(${s.id})};render()">Edit</button></td></tr>`).join('')}</table></div>
+<div class="card"><h3>${e.id ? 'Edit' : 'Create'} service</h3>
+<!-- plain <div>, not <form>, for the same sandboxed-iframe reason as the login screen -->
+<div>
+<label>Service name (required, max 100)</label>
+<input id="sn" maxlength="100" value="${e.name}" oninput="$('#cnt').textContent=this.value.length+'/100'">
+<div class="row"><span class="err sp" id="s1"></span><span class="mu" id="cnt">${e.name.length}/100</span></div>
+<label>Description (required)</label><textarea id="sd" rows="2">${e.desc}</textarea><div class="err" id="s2"></div>
+<label>Expected duration (minutes, required)</label><input id="su" type="number" min="1" max="480" value="${e.dur}"><div class="err" id="s3"></div>
+<label>Priority level</label><select id="sp">${['low','medium','high'].map(p => `<option ${e.pri==p?'selected':''}>${p}</option>`).join('')}</select>
+<p><button class="btn p" onclick="saveSvc()">Save service</button> ${e.id ? `<button class="btn" onclick="S.edit=null;render()">Cancel</button>` : ''}</p>
+</div></div>`; },
+ // ADMIN: view one service's queue, reorder / remove / serve next (UI only)
+ qm(){
+   const s = svc(S.qsel);
+   return `<h2>Queue Management 📋</h2><div class="card">
+<div class="row"><select style="width:auto" onchange="S.qsel=+this.value;render()">
+       ${S.svcs.map(x => `<option value="${x.id}" ${x.id==S.qsel?'selected':''}>${x.name}</option>`).join('')}</select>
+<span class="sp"></span><button class="btn p" ${s.q.length ? '' : 'disabled'} onclick="serve(${s.id})">Serve next</button></div>
+     ${s.q.length ? `<table>${s.q.map((n,i) => `<tr><td>${i+1}</td><td>${n}</td><td>
+<button class="btn" ${i ? '' : 'disabled'} onclick="mv(${i},-1)">↑</button>
+<button class="btn" ${i < s.q.length-1 ? '' : 'disabled'} onclick="mv(${i},1)">↓</button>
+<button class="btn d" onclick="rm(${i})">Remove</button></td></tr>`).join('')}</table>` : '<p class="mu">Queue is empty 🌙</p>'}
+</div>`; }
+};
+
 // User joins a queue
 
 function join(id){ const s = svc(id); s.q.push('You'); S.my = id; notify('You joined ' + s.name + '. Position #' + pos(s)); render(); }
