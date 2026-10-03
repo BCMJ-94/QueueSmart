@@ -1,3 +1,56 @@
+// ---------- NAVIGATION ----------
+function go(v){ S.view = v; S.showN = false; render(); }
+const USER_NAV  = [['dash','🏠 Dashboard'],['join','🎟️ Join Queue'],['status','⏳ Status'],['hist','📖 History']];
+const ADMIN_NAV = [['adash','🏠 Dashboard'],['svcm','🧸 Services'],['qm','📋 Queues']];
+// ---------- MAIN RENDER: draws login screen OR header + current view ----------
+function render(){
+ if(!S.role){ $('#root').innerHTML = authView(); return; }
+ const nav = (S.role == 'admin' ? ADMIN_NAV : USER_NAV)
+   .map(([k,l]) => `<button class="${S.view==k?'on':''}" onclick="go('${k}')">${l}</button>`).join('');
+ $('#root').innerHTML = `
+<header><b>🎀 QueueSmart</b><nav>${nav}</nav>
+<button class="btn" id="bell" onclick="S.showN=!S.showN;S.unread=0;render()">🔔${S.unread ? `<i>${S.unread}</i>` : ''}</button>
+<span class="mu">${S.email}</span>
+<button class="btn" onclick="S.role=null;S.view='login';render()">Log out</button></header>
+<main>
+   ${S.showN ? `<div class="card"><h3>🔔 Notifications</h3>${S.notes.map(n => `<div>• ${n.m} <span class="mu">${n.t}</span></div>`).join('')}</div>` : ''}
+   ${V[S.view]()}
+</main>`;
+}
+// ---------- AUTH: Login + Registration ----------
+function authView(){
+ const r = S.auth == 'reg';
+ // NOTE: this is a <div>, not a <form> - some sandboxed previews block real form
+ // submission (they need an "allow-forms" permission we don't control), which would
+ // stop our validation from ever running. A plain button + onclick avoids that.
+ return `<div class="card auth"><h2>🎀 QueueSmart</h2>
+<div class="tabs"><button class="btn ${r?'':'p'}" onclick="S.auth='login';render()">Login</button>
+<button class="btn ${r?'p':''}" onclick="S.auth='reg';render()">Register</button></div>
+<div>
+<label>Email (used as username)</label><input id="em" type="email" placeholder="you@example.com"><div class="err" id="e1"></div>
+<label>Password</label><input id="pw" type="password" placeholder="At least 8 characters"><div class="err" id="e2"></div>
+   ${r ? `<label>Confirm password</label><input id="pw2" type="password"><div class="err" id="e3"></div>` : ''}
+<button class="btn p" style="width:100%;margin-top:10px" onclick="doAuth()">${r ? 'Create account' : 'Log in'}</button>
+</div>
+<p class="mu">✨ Tip: an email containing "admin" logs in as Administrator.</p></div>`;
+}
+// Client-side validation for login/register (required, email format, password length, match)
+// Called directly from the button's onclick (no <form> submit event involved).
+function doAuth(){
+ const em = $('#em').value.trim(), pw = $('#pw').value, reg = S.auth == 'reg';
+ let ok = true;
+ const set = (id, m) => { $(id).textContent = m; if(m) ok = false; };   // show error text, mark form invalid
+ set('#e1', !em ? 'Email is required.' : !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em) ? 'Enter a valid email.' : '');
+ set('#e2', !pw ? 'Password is required.' : pw.length < 8 ? 'Minimum 8 characters.' : '');
+ if(reg) set('#e3', $('#pw2').value !== pw ? 'Passwords do not match.' : '');
+ if(ok){                                   // mock login: no server check
+   S.role = /admin/i.test(em) ? 'admin' : 'user';
+   S.email = em;
+   S.view = S.role == 'admin' ? 'adash' : 'dash';
+   render();
+ }
+}
+
 // User joins a queue
 
 function join(id){ const s = svc(id); s.q.push('You'); S.my = id; notify('You joined ' + s.name + '. Position #' + pos(s)); render(); }
