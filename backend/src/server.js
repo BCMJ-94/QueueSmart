@@ -1,5 +1,6 @@
 import { createApp } from './app.js'
 import { createAuthService } from './authService.js'
+//import services module here
 
 const port = Number(process.env.PORT ?? 3001)
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -24,7 +25,7 @@ app.listen(port, () => {
 })
 
 const queueService = createQueueService({
-  getService: (id) => { try { return catalogService.get(id) } catch { return undefined } },  // adjust to the real catalog API
+  getService: (id) => { try { return catalogService.get(id) } catch { return undefined } },  // catalogService is just a dummy name rn until the services module is added
   recordHistory: (event) => historyService.record(event),
   getUserEmail: (userId) => authService.getUserById(userId)?.email,
 })
