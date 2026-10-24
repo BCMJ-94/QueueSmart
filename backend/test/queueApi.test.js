@@ -2,25 +2,33 @@ import assert from 'node:assert/strict'
 import { after, before, test } from 'node:test'
 import { createApp } from '../src/app.js'
 import { createAuthService } from '../src/authService.js'
-//import service module here
+import { createQueueService } from '../src/queueService.js'
+import { createServiceService } from "../src/serviceService.js";
 //note: this test will not run until the service module is added and the appropriate calls are modified accordingly
 //however, tests using dummy functions did pass
-import { createQueueService } from '../src/queueService.js'
 
 // Real HTTP requests against the app running on a random local port.
 // The queue service is wired the way server.js will wire it: it reads services from the
 // catalog, records history into an array, and looks up emails from the users made here.
 const authService = createAuthService()
-const catalogService = createCatalogService()
+const serviceService = createServiceService()
 const emails = new Map()   // user id -> email
 const history = []
 
 const queueService = createQueueService({
-  getService: (id) => { try { return catalogService.get(id) } catch { return undefined } },
+  getService: (id) => {
+    const service = serviceService.getById(id)
+    if (!service) {return undefined}
+
+    return {
+      ...service,
+      open: service.status === 'open',
+    }
+    },
   recordHistory: (event) => history.push(event),
   getUserEmail: (userId) => emails.get(userId),
 })
-const app = createApp({ authService, catalogService, queueService })
+const app = createApp({ authService, serviceService, queueService })
 const appWithoutQueues = createApp({ authService })
 
 let server

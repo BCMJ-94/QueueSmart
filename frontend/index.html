@@ -100,6 +100,32 @@ const S = {
 
 // Find a service by id, and find "You" in its queue (1-based position, 0 = not in queue)
 const svc = id => S.svcs.find(x => x.id == id);
+async function loadServices({ rerender = true } = {}) {
+  if (!S.token) return
+
+  try {
+    S.svcs = await queueApi.listServices()
+
+    if (!svc(S.qsel) && S.svcs.length) {
+      S.qsel = S.svcs[0].id
+    }
+
+    if (
+      rerender &&
+      S.role &&
+      ['adash', 'svcm'].includes(S.view)
+    ) {
+      render()
+    }
+  } catch (err) {
+    toast(
+      err.status
+        ? `Could not load services: ${err.message}`
+        : 'Cannot reach the server while loading services.',
+    )
+  }
+}
+
 const pos = s => s.q.indexOf('You') + 1;
 const today = () => new Date().toISOString().slice(0, 10);
 
@@ -116,7 +142,7 @@ async function recordQueueActivity(type, service, position){
 }
 
 // ---------- NAVIGATION ----------
-function go(v){ S.view = v; S.showN = false; if(v === 'hist') loadHistory(); render(); }
+function go(v){ S.view = v; S.showN = false; if(S.role === 'admin' && ['adash', 'svcm'].includes(v)) { loadServices() }; if(v === 'hist') loadHistory(); render(); }
 async function loadNotifications(){ if(!S.token) return; try { const data = await api('/api/notifications'); S.notes = data.notifications || []; S.unread = data.unreadCount ?? S.notes.filter(n => !n.read).length; if(S.role) render(); } catch(err){ toast('Could not load notifications.'); } }
 async function loadHistory(){ if(!S.token) return; try { const data = await api('/api/history'); S.hist = (data.history || []).map(h => ({ d: new Date(h.occurredAt).toLocaleString(), s: h.serviceName || `Service ${h.serviceId}`, o: h.outcome })); if(S.role && S.view === 'hist') render(); } catch(err){ toast('Could not load history.'); } }
 async function markNotificationsRead(){ try { await api('/api/notifications/read-all', {method:'PATCH'}); S.notes = S.notes.map(n => ({...n, read:true})); S.unread = 0; } catch(err){ toast('Could not update notifications.'); } }
@@ -172,6 +198,7 @@ async function doAuth(){
    S.role = user.role == 'Administrator' ? 'admin' : 'user';   // role comes from the backend
    S.email = user.email;
    S.view = S.role == 'admin' ? 'adash' : 'dash';
+   await loadServices({ rerender: false})
    if(reg) toast('Account created ✨');
    render();
    await Promise.all([loadNotifications(), loadHistory()]);
@@ -232,8 +259,9 @@ const V = {
  svcm(){
    const e = S.edit || {name:'', desc:'', dur:'', pri:'medium'};      // blank form when creating
    return `<h2>Service Management 🧸</h2>
-<div class="card"><table><tr><th>Service</th><th>Duration</th><th>Priority</th><th></th></tr>
-     ${S.svcs.map(s => `<tr><td>${s.name}</td><td>${s.dur} min</td><td class="${s.pri}">${s.pri}</td>
+<div class="card"><table><tr><th>Service</th><th>Duration</th><th>Priority</th><th>Status</th><th></th></tr>
+     ${S.svcs.map(s => `<tr><td>${escapeHtml(s.name)}</td><td>${s.dur} min</td><td class="${s.pri}">${escapeHtml(s.pri)}</td>
+    <td class="${s.open ? 'open' : ''}"> ${s.open ? 'Open' : 'Closed'}</td>
 <td><button class="btn" onclick="S.edit={...svc(${s.id})};render()">Edit</button></td></tr>`).join('')}</table></div>
 <div class="card"><h3>${e.id ? 'Edit' : 'Create'} service</h3>
 <!-- plain <div>, not <form>, for the same sandboxed-iframe reason as the login screen -->
@@ -275,7 +303,7 @@ async function join(id){
     toast(err.status ? err.message : 'Cannot reach the server.');   // 404 unknown service, 409 closed / already queued
   }
   render();
-} 
+}
 // User leaves their queue -> saved to history
 
 async function leave(){
@@ -286,7 +314,7 @@ async function leave(){
   await recordQueueActivity('queue_left', s);
   toast('You left the queue'); render();
 }
- 
+
 // Serve the next person. If that was "You", status becomes Served; if You are now first, "almost ready"
 
 async function leave(){
@@ -301,7 +329,7 @@ async function leave(){
   s.q = s.q.filter(n => n != 'You');
   S.hist.unshift({d: today(), s: s.name, o: 'Left queue'});
   S.my = null; toast('You left the queue'); render();
-} 
+}
   async function serve(id){
     const s = svc(id), name = s.q[0];
     try {
@@ -315,9 +343,12 @@ async function leave(){
   // Admin opens/closes a queue
   async function tog(id){
     const s = svc(id);
+    if (!s) return;
+
     try {
       const updated = await queueApi.setServiceOpen(id, !s.open);   // PATCH /api/services/:id { open }
-      s.open = updated.open;                                         // only this field: updated.q is an empty placeholder
+      s.open = updated.open;                                    // only this field: updated.q is an empty placeholder
+      s.status = updated.status;
       notify(s.name + ' queue ' + (s.open ? 'opened' : 'closed'));
     } catch(err){ fail(err); }
     render();
@@ -345,32 +376,77 @@ async function leave(){
     } catch(err){ fail(err); }
     render();
   }
-  function saveSvc(e){
 
-  e.preventDefault();
+ async function saveSvc() {
+  const n = $('#sn').value.trim()
+  const d = $('#sd').value.trim()
+  const u = $('#su').value
 
-  const n = $('#sn').value.trim(), d = $('#sd').value.trim(), u = $('#su').value;
+  let ok = true
 
-  let ok = true;
+  const set = (selector, message) => {
+    $(selector).textContent = message
+    if (message) ok = false
+  }
 
-  const set = (i, m) => { $(i).textContent = m; if(m) ok = false; };
+  set(
+    '#s1',
+    !n
+      ? 'Name is required.'
+      : n.length > 100
+        ? 'Max 100 characters.'
+        : '',
+  )
 
-  set('#s1', !n ? 'Name is required.' : n.length > 100 ? 'Max 100 characters.' : '');
+  set('#s2', !d ? 'Description is required.' : '')
 
-  set('#s2', !d ? 'Description is required.' : '');
+  set(
+    '#s3',
+    !u
+      ? 'Duration is required.'
+      : !Number.isInteger(Number(u)) ||
+          Number(u) < 1 ||
+          Number(u) > 480
+        ? 'Enter a whole number, 1-480.'
+        : '',
+  )
 
-  set('#s3', !u ? 'Duration is required.' : !(+u >= 1 && +u <= 480) || !Number.isInteger(+u) ? 'Enter a whole number, 1-480.' : '');
+  if (!ok) return
 
-  if(!ok) return false;
+  const fields = {
+    name: n,
+    desc: d,
+    dur: Number(u),
+    pri: $('#sp').value,
+  }
 
-  const p = $('#sp').value;
+  try {
+    if (S.edit?.id) {
+      await queueApi.updateService(S.edit.id, fields)
+    } else {
+      await queueApi.createService(fields)
+    }
 
-  if(S.edit && S.edit.id) Object.assign(svc(S.edit.id), {name: n, desc: d, dur: +u, pri: p});          // update existing
+    await loadServices({ rerender: false })
 
-  else S.svcs.push({id: Date.now(), name: n, desc: d, dur: +u, pri: p, open: true, q: []});             // create new
+    S.edit = null
+    toast('Service saved ✨')
+    render()
+  } catch (err) {
+    const errors = err.data?.errors || {}
 
-  S.edit = null; toast('Service saved ✨'); render(); return false;
+    if (errors.name) $('#s1').textContent = errors.name
+    if (errors.description) $('#s2').textContent = errors.description
+    if (errors.duration) $('#s3').textContent = errors.duration
 
+    if (!Object.keys(errors).length) {
+      toast(
+        err.status
+          ? err.message
+          : 'Cannot reach the server.',
+      )
+    }
+  }
 }
 
 render();   // first draw: shows the login screen

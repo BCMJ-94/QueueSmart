@@ -3,6 +3,10 @@ import { createAuthService } from './authService.js'
 import { createNotificationService } from './notificationService.js'
 import { createHistoryService } from './historyService.js'
 
+const { createServiceService } = require('./serviceService');
+
+const serviceService = createServiceService()
+
 const port = Number(process.env.PORT ?? 3001)
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error('PORT must be a valid TCP port.')
@@ -28,7 +32,7 @@ app.listen(port, () => {
 })
 
 const queueService = createQueueService({
-  getService: (id) => { try { return catalogService.get(id) } catch { return undefined } }, //catalogService is a dummy reference until the services module is added
+  getService: (id) => { try { return serviceService.getById(id) } catch { return undefined } },
   recordHistory: (event) => historyService.record(event),
   getUserEmail: (userId) => authService.getUserById(userId)?.email,
 })

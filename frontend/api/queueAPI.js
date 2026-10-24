@@ -11,7 +11,8 @@ const fromApiService = (s) => ({
   desc: s.description,
   dur: s.duration,
   pri: s.priority,
-  open: s.open,
+  status: s.status,
+  open: s.status === 'open',
   q: [],   
 })
 
@@ -37,11 +38,11 @@ const queueApi = {
     if (fields.desc !== undefined) body.description = fields.desc
     if (fields.dur !== undefined) body.duration = fields.dur
     if (fields.pri !== undefined) body.priority = fields.pri
-    const { service } = await api(`/api/services/${id}`, { method: 'PATCH', body })
+    const { service } = await api(`/api/services/${id}`, { method: 'PUT', body: toAPIService(fields) })
     return fromApiService(service)
   },
   async setServiceOpen(id, open) {                    // replaces tog()
-    const { service } = await api(`/api/services/${id}`, { method: 'PATCH', body: { open } })
+    const { service } = await api(`/api/services/${id}/status`, { method: 'PATCH', body: { status: open ? 'open' : 'closed' }, })
     return fromApiService(service)
   },
 

@@ -7,12 +7,14 @@ import { createHistoryService } from './historyService.js'
 import { createNotificationHistoryRoutes } from './notificationHistoryRoutes.js'
 import { QueueError } from './queueService.js'
 import { createQueueRoutes } from './queueRoutes.js'
+import { createServiceService } from './serviceService.js';
+import { createServiceRoutes } from './serviceRoutes.js';
 
 // Allows the front end when it is served from any localhost port
 // (VS Code Live Server, npx serve, etc.) plus an optional configured origin.
 const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/
 
-export function createApp({ authService, catalogService = createCatalogService(), queueService, frontendOrigin, notificationService = createNotificationService(), historyService = createHistoryService() } = {}) {
+export function createApp({ authService, serviceService = createServiceService(), queueService, frontendOrigin, notificationService = createNotificationService(), historyService = createHistoryService() } = {}) {
   if (!authService) {
     throw new Error('An authentication service is required.')
   }
@@ -53,6 +55,15 @@ export function createApp({ authService, catalogService = createCatalogService()
     response.status(204).end()
   })
 
+  // --------- Service Module --------
+  app.use(
+    '/api/services',
+    createServiceRoutes({
+      authService,
+      serviceService,
+    })
+  );
+
   // ---------- Queue module ----------
   // Only mounted when a queueService is passed in, so callers that don't use queues
   // (like the existing tests) keep working.
@@ -75,7 +86,7 @@ export function createApp({ authService, catalogService = createCatalogService()
       return next(error)
     }
 
-    if (error instanceof AuthError || error instanceof ServiceError || error instanceof QueueError) {
+    if (error instanceof AuthError || error instanceof QueueError) {
       return response.status(error.status).json({
         message: error.message,
         ...(error.errors ? { errors: error.errors } : {}),
