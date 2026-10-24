@@ -283,33 +283,63 @@ function leave(){
  
 // Serve the next person. If that was "You", status becomes Served; if You are now first, "almost ready"
 
-function serve(id){
+async function leave(){
+  const s = svc(S.my);
+  try {
+    await queueApi.leave();                               } catch(err){
+    if(err.status !== 409){
+      toast(err.status ? err.message : 'Cannot reach the server.');
+      return;
+    }
+  }
+  s.q = s.q.filter(n => n != 'You');
+  S.hist.unshift({d: today(), s: s.name, o: 'Left queue'});
+  S.my = null; toast('You left the queue'); render();
+} 
+  async function serve(id){
+    const s = svc(id), name = s.q[0];
+    try {
+      await queueApi.serveNext(id);                        // POST /api/queues/:id/serve-next
+      await loadQueue(id);
+      notify('Queue updated: ' + name + ' was served.');
+    } catch(err){ fail(err); }
+    render();
+  }
 
-  const s = svc(id), n = s.q.shift();
+  // Admin opens/closes a queue
+  async function tog(id){
+    const s = svc(id);
+    try {
+      const updated = await queueApi.setServiceOpen(id, !s.open);   // PATCH /api/services/:id { open }
+      s.open = updated.open;                                         // only this field: updated.q is an empty placeholder
+      notify(s.name + ' queue ' + (s.open ? 'opened' : 'closed'));
+    } catch(err){ fail(err); }
+    render();
+  }
 
-  if(n == 'You'){ S.hist.unshift({d: today(), s: s.name, o: 'Served'}); S.my = null; notify('Status: Served. Thank you! 💖'); }
+  // Admin moves a person up (d = -1) or down (d = 1)
+  async function mv(i, d){
+    const id = S.qsel, s = svc(id), entry = s.entries?.[i];
+    if(!entry){ toast('This queue is out of date. Reopen the screen.'); return; }
+    try {
+      const { entries } = await queueApi.moveEntry(id, entry.entryId, d < 0 ? 'up' : 'down');   // POST .../move
+      applyQueue(s, entries);
+    } catch(err){ fail(err); }
+    render();
+  }
 
-  else if(n && pos(s) == 1) notify('Almost ready - you are next in ' + s.name + '!');
-
-  else if(n) notify('Queue updated: ' + n + ' was served.');
-
-  render();
-
-}
- 
-// Admin opens/closes a queue
-
-function tog(id){ const s = svc(id); s.open = !s.open; notify(s.name + ' queue ' + (s.open ? 'opened' : 'closed')); render(); }
- 
-// Admin reorders (swap with neighbor) or removes a person
-
-function mv(i, d){ const q = svc(S.qsel).q; [q[i], q[i+d]] = [q[i+d], q[i]]; render(); }
-
-function rm(i){ const s = svc(S.qsel), n = s.q.splice(i, 1)[0]; if(n == 'You'){ S.my = null; notify('You were removed from ' + s.name); } render(); }
- 
-// Service form validation: name required + max 100, description required, duration whole number 1-480
-
-function saveSvc(e){
+  // Admin removes a person
+  async function rm(i){
+    const id = S.qsel, s = svc(id), entry = s.entries?.[i];
+    if(!entry){ toast('This queue is out of date. Reopen the screen.'); return; }
+    try {
+      await queueApi.removeEntry(id, entry.entryId);       // DELETE /api/queues/:id/entries/:entryId
+      await loadQueue(id);
+      notify(entry.email + ' was removed from ' + s.name);
+    } catch(err){ fail(err); }
+    render();
+  }
+  function saveSvc(e){
 
   e.preventDefault();
 
