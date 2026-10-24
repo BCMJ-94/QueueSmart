@@ -2,12 +2,14 @@ import cors from 'cors'
 import express from 'express'
 import { AuthError } from './authService.js'
 import { requireAuthentication } from './authMiddleware.js'
+import { QueueError } from './queueService.js'
+import { createQueueRoutes } from './queueRoutes.js'
 
 // Allows the front end when it is served from any localhost port
 // (VS Code Live Server, npx serve, etc.) plus an optional configured origin.
 const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/
 
-export function createApp({ authService, frontendOrigin } = {}) {
+export function createApp({ authService, catalogService = createCatalogService(), queueService, frontendOrigin } = {}) {
   if (!authService) {
     throw new Error('An authentication service is required.')
   }
@@ -48,15 +50,18 @@ export function createApp({ authService, frontendOrigin } = {}) {
     response.status(204).end()
   })
 
+  // ---------- Queue module ----------
+  // Only mounted when a queueService is passed in, so callers that don't use queues
+  // (like the existing tests) keep working.
+  if (queueService) {
+    app.use('/api/queues', requireAuth, createQueueRoutes({ queueService }))
+  }
+
   // ---------- Other modules mount their routes here ----------
-  // e.g. app.use('/api/services', requireAuth, createServiceRoutes({ ... }))
+  // e.g. app.use('/api/history', requireAuth, createHistoryRoutes({ ... }))
 
   app.use('/api', (request, response) => {
     response.status(404).json({ message: 'Not found.' })
-  })
-
-  app.post('/api/queues/:serviceId/join', requireAuth, (request, response) => {
-    response.status(201).json(queueService.join(request.user.id, request.params.serviceId))
   })
 
   app.use((error, request, response, next) => {
@@ -64,7 +69,7 @@ export function createApp({ authService, frontendOrigin } = {}) {
       return next(error)
     }
 
-    if (error instanceof AuthError) {
+    if (error instanceof AuthError || error instanceof ServiceError || error instanceof QueueError) {
       return response.status(error.status).json({
         message: error.message,
         ...(error.errors ? { errors: error.errors } : {}),
