@@ -55,6 +55,10 @@ export function createApp({ authService, frontendOrigin } = {}) {
     response.status(404).json({ message: 'Not found.' })
   })
 
+  app.post('/api/queues/:serviceId/join', requireAuth, (request, response) => {
+    response.status(201).json(queueService.join(request.user.id, request.params.serviceId))
+  })
+
   app.use((error, request, response, next) => {
     if (response.headersSent) {
       return next(error)
