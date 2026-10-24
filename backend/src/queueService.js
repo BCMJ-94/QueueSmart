@@ -18,7 +18,7 @@ export class QueueError extends Error {
   }
 }
 
-export function createQueueService({ getService, recordHistory, getUserEmail }) {
+export function createQueueService({ getService, recordHistory, getUserEmail, notify = () => {} }) {
   const queues = new Map()         // service.id -> [ { entryId, userId, joinedAt } ]  (index 0 = next up)
   const queuedByUser = new Map()   // userId -> service.id  (one queue per user)
   let nextEntryId = 1
@@ -65,9 +65,13 @@ export function createQueueService({ getService, recordHistory, getUserEmail }) 
     if (!service.open) throw new QueueError(409, 'This queue is closed.')
     if (queuedByUser.has(userId)) throw new QueueError(409, 'You are already in a queue.')
 
-    queueFor(service.id).push({ entryId: nextEntryId++, userId, joinedAt: new Date().toISOString() })
+    const entry = { entryId: nextEntryId++, userId, joinedAt: new Date().toISOString() }
+    queueFor(service.id).push(entry)
     queuedByUser.set(userId, service.id)
-    return myQueue(userId)
+    const result = myQueue(userId)
+    notify({ userId, type: 'queue_joined', message: `You joined ${service.name}. Your position is #${result.entry.position}.`, serviceId: service.id, serviceName: service.name })
+    if (result.entry.position === 1) notify({ userId, type: 'next_in_line', message: `You're next in line for ${service.name}. Please get ready.`, serviceId: service.id, serviceName: service.name })
+    return result
   }
 
   function leave(userId) {
@@ -75,9 +79,12 @@ export function createQueueService({ getService, recordHistory, getUserEmail }) 
     if (serviceId === undefined) throw new QueueError(409, 'You are not in a queue.')
 
     const queue = queueFor(serviceId)
-    queue.splice(queue.findIndex((entry) => entry.userId === userId), 1)
+    const oldPosition = queue.findIndex((entry) => entry.userId === userId)
+    queue.splice(oldPosition, 1)
     queuedByUser.delete(userId)
-    recordHistory({ userId, serviceId, outcome: 'Left queue' })
+    const service = getService(serviceId)
+    if (oldPosition === 0 && queue[0]) notify({ userId: queue[0].userId, type: 'next_in_line', message: `You're next in line for ${service.name}. Please get ready.`, serviceId: service.id, serviceName: service.name })
+    recordHistory({ userId, serviceId, serviceName: service?.name ?? null, outcome: 'Left queue' })
   }
 
   // ---------- administrator actions ----------
@@ -99,7 +106,10 @@ export function createQueueService({ getService, recordHistory, getUserEmail }) 
     if (!entry) throw new QueueError(409, 'The queue is empty.')
 
     queuedByUser.delete(entry.userId)
-    recordHistory({ userId: entry.userId, serviceId: service.id, outcome: 'Served' })
+    recordHistory({ userId: entry.userId, serviceId: service.id, serviceName: service.name, outcome: 'Served' })
+    notify({ userId: entry.userId, type: 'served', message: `You've been served at ${service.name}.`, serviceId: service.id, serviceName: service.name })
+    const next = queueFor(service.id)[0]
+    if (next) notify({ userId: next.userId, type: 'next_in_line', message: `You're next in line for ${service.name}. Please get ready.`, serviceId: service.id, serviceName: service.name })
     return { served: { entryId: entry.entryId, userId: entry.userId } }
   }
 
@@ -109,7 +119,9 @@ export function createQueueService({ getService, recordHistory, getUserEmail }) 
     const [entry] = queue.splice(index, 1)
 
     queuedByUser.delete(entry.userId)
-    recordHistory({ userId: entry.userId, serviceId: service.id, outcome: 'Removed' })
+    recordHistory({ userId: entry.userId, serviceId: service.id, serviceName: service.name, outcome: 'Removed' })
+    notify({ userId: entry.userId, type: 'removed', message: `You were removed from ${service.name}.`, serviceId: service.id, serviceName: service.name })
+    if (index === 0 && queue[0]) notify({ userId: queue[0].userId, type: 'next_in_line', message: `You're next in line for ${service.name}. Please get ready.`, serviceId: service.id, serviceName: service.name })
   }
 
   // Relative moves ("up one") stay correct even if another admin changed the list meanwhile
