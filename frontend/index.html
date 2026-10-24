@@ -264,10 +264,10 @@ const V = {
 async function join(id){
   try {
     const { entry } = await queueApi.join(id);          // POST /api/queues/:id/join (no body: the token says who you are)
-    const s = svc(id);
+    //const s = svc(id);
     // Temporary: the other screens still read s.q, so mirror the server's position there
-    s.q = s.q.filter(n => n != 'You');
-    s.q.splice(entry.position - 1, 0, 'You');
+    S.q = S.q.filter(n => n != 'You');
+    S.q.splice(entry.position - 1, 0, 'You');
     S.my = id;
     notify('You joined ' + s.name + '. Position #' + entry.position);
   } catch(err){
