@@ -83,7 +83,7 @@ const S = {
   auth: 'login',       // login/register tab
   my: null,            // id of the service the user is queued in
   showN: false,        // is the notification panel open?
-  unread: 2,           // unread notification count
+  unread: 0,           // unread notification count
   qsel: 1,             // service selected in Queue Management
   edit: null,          // service being edited (null = creating new)
   svcs: [              // each service: name, description, minutes per person, priority, open flag, queue of names
@@ -91,11 +91,8 @@ const S = {
     {id:2, name:'Urgent Care', desc:'Time-sensitive issues', dur:10, pri:'high', open:true, q:['Dan K.']},
     {id:3, name:'Music Lesson', desc:'30 minute private lesson', dur:30, pri:'low', open:false, q:[]}
   ],
-  hist: [
-    {d:'2026-09-12', s:'General Consultation', o:'Served'},
-    {d:'2026-08-30', s:'Music Lesson', o:'Left queue'}
-  ],
-  notes: [{m:'Welcome to QueueSmart! 🎀', t:'Today'}, {m:'Urgent Care queue is now open.', t:'Today'}]
+  hist: [],             // loaded from /api/history
+  notes: []             // loaded from /api/notifications
 };
 
 // Find a service by id, and find "You" in its queue (1-based position, 0 = not in queue)
@@ -104,11 +101,22 @@ const pos = s => s.q.indexOf('You') + 1;
 const today = () => new Date().toISOString().slice(0, 10);
 
 // ---------- NOTIFICATIONS (in-app only) ----------
+function escapeHtml(value){ return String(value ?? '').replace(/[&<>\"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','\"':'&quot;',"'":'&#39;'}[c])); }
+async function toggleNotifications(){ S.showN = !S.showN; if(S.showN){ await loadNotifications(); } render(); }
 function toast(m){ const t = $('#toast'); t.textContent = m; t.style.display = 'block'; setTimeout(() => t.style.display = 'none', 2500); }
-function notify(m){ S.notes.unshift({m, t: now()}); S.unread++; toast(m); }   // saves it AND pops a toast
+function notify(m){ toast(m); }
+async function recordQueueActivity(type, service, position){
+ try {
+   await api('/api/activity', {method:'POST', body:{type, serviceId:String(service.id), serviceName:service.name, ...(position ? {position} : {})}});
+   await Promise.all([loadNotifications(), loadHistory()]);
+ } catch(err) { toast('Could not save queue activity: ' + err.message); }
+}
 
 // ---------- NAVIGATION ----------
-function go(v){ S.view = v; S.showN = false; render(); }
+function go(v){ S.view = v; S.showN = false; if(v === 'hist') loadHistory(); render(); }
+async function loadNotifications(){ if(!S.token) return; try { const data = await api('/api/notifications'); S.notes = data.notifications || []; S.unread = data.unreadCount ?? S.notes.filter(n => !n.read).length; if(S.role) render(); } catch(err){ toast('Could not load notifications.'); } }
+async function loadHistory(){ if(!S.token) return; try { const data = await api('/api/history'); S.hist = (data.history || []).map(h => ({ d: new Date(h.occurredAt).toLocaleString(), s: h.serviceName || `Service ${h.serviceId}`, o: h.outcome })); if(S.role && S.view === 'hist') render(); } catch(err){ toast('Could not load history.'); } }
+async function markNotificationsRead(){ try { await api('/api/notifications/read-all', {method:'PATCH'}); S.notes = S.notes.map(n => ({...n, read:true})); S.unread = 0; } catch(err){ toast('Could not update notifications.'); } }
 const USER_NAV  = [['dash','🏠 Dashboard'],['join','🎟️ Join Queue'],['status','⏳ Status'],['hist','📖 History']];
 const ADMIN_NAV = [['adash','🏠 Dashboard'],['svcm','🧸 Services'],['qm','📋 Queues']];
 // ---------- MAIN RENDER: draws login screen OR header + current view ----------
@@ -118,11 +126,11 @@ function render(){
    .map(([k,l]) => `<button class="${S.view==k?'on':''}" onclick="go('${k}')">${l}</button>`).join('');
  $('#root').innerHTML = `
 <header><b>🎀 QueueSmart</b><nav>${nav}</nav>
-<button class="btn" id="bell" onclick="S.showN=!S.showN;S.unread=0;render()">🔔${S.unread ? `<i>${S.unread}</i>` : ''}</button>
+<button class="btn" id="bell" onclick="toggleNotifications()">🔔${S.unread ? `<i>${S.unread}</i>` : ''}</button>
 <span class="mu">${S.email}</span>
 <button class="btn" onclick="logout()">Log out</button></header>
 <main>
-   ${S.showN ? `<div class="card"><h3>🔔 Notifications</h3>${S.notes.map(n => `<div>• ${n.m} <span class="mu">${n.t}</span></div>`).join('')}</div>` : ''}
+   ${S.showN ? `<div class="card"><div class="row"><h3 class="sp">🔔 Notifications</h3><button class="btn" onclick="markNotificationsRead().then(render)" ${S.unread ? '' : 'disabled'}>Mark all read</button></div>${S.notes.length ? S.notes.map(n => `<div style="padding:8px 0;border-bottom:1px dotted var(--bd)">${n.read ? '○' : '●'} ${escapeHtml(n.message)} <span class="mu">${new Date(n.createdAt).toLocaleString()}</span></div>`).join('') : '<p class="mu">No notifications yet.</p>'}</div>` : ''}
    ${V[S.view]()}
 </main>`;
 }
@@ -163,6 +171,7 @@ async function doAuth(){
    S.view = S.role == 'admin' ? 'adash' : 'dash';
    if(reg) toast('Account created ✨');
    render();
+   await Promise.all([loadNotifications(), loadHistory()]);
  } catch(err){
    // 400 -> show field errors under each input; 401/409 -> general message
    const f = (err.data && err.data.errors) || {};
@@ -174,7 +183,7 @@ async function doAuth(){
 // Ends the session on the backend, then returns to the login screen
 async function logout(){
  try { await api('/api/auth/logout', { method: 'POST' }); } catch(err){ /* already logged out on the server */ }
- S.role = null; S.email = ''; S.token = null; S.view = 'login'; render();
+ S.role = null; S.email = ''; S.token = null; S.view = 'login'; S.notes = []; S.hist = []; S.unread = 0; render();
 }
 
 // ---------- VIEWS: each function returns the HTML for one screen ----------
@@ -185,7 +194,7 @@ const V = {
 <div class="card"><h3>Your queue</h3>
        ${S.my ? `<div class="big">#${pos(svc(S.my))}</div><div class="mu">${svc(S.my).name}</div>` : '<p class="mu">Not in a queue yet.</p>'}
 <button class="btn" onclick="go('status')">View status</button></div>
-<div class="card"><h3>Notifications</h3>${S.notes.slice(0,3).map(n => `<div>• ${n.m}</div>`).join('')}</div>
+<div class="card"><h3>Notifications</h3>${S.notes.slice(0,3).map(n => `<div>• ${escapeHtml(n.message)}</div>`).join('') || '<p class="mu">No notifications yet.</p>'}</div>
 </div>
 <div class="card"><h3>Active services</h3><table><tr><th>Service</th><th>Waiting</th><th>Est. wait</th><th>Status</th></tr>
      ${S.svcs.map(s => `<tr><td>${s.name}</td><td>${s.q.length}</td><td>${s.q.length * s.dur} min</td><td class="${s.open?'open':''}">${s.open?'Open':'Closed'}</td></tr>`).join('')}</table></div>`; },
@@ -211,8 +220,7 @@ const V = {
 <button class="btn p" onclick="serve(${s.id})">Simulate: serve next</button>
 <button class="btn d" onclick="leave()">Leave queue</button></div>`; },
  // USER: past queues (date, service, outcome)
- hist(){ return `<h2>History 📖</h2><div class="card"><table><tr><th>Date</th><th>Service</th><th>Outcome</th></tr>
-   ${S.hist.map(h => `<tr><td>${h.d}</td><td>${h.s}</td><td>${h.o}</td></tr>`).join('')}</table></div>`; },
+ hist(){ return `<h2>History 📖</h2><div class="card">${S.hist.length ? `<table><tr><th>Date</th><th>Service</th><th>Outcome</th></tr>${S.hist.map(h => `<tr><td>${escapeHtml(h.d)}</td><td>${escapeHtml(h.s)}</td><td>${escapeHtml(h.o)}</td></tr>`).join('')}</table>` : '<p class="mu">No queue history yet. Your completed or cancelled queue visits will appear here.</p>'}<button class="btn" onclick="loadHistory()">Refresh</button></div>`; },
  // ADMIN: services, queue lengths, open/close quick action
  adash(){ return `<h2>Admin Dashboard 🏠</h2><div class="card"><table><tr><th>Service</th><th>Queue length</th><th>Status</th><th>Action</th></tr>
    ${S.svcs.map(s => `<tr><td>${s.name}</td><td>${s.q.length}</td><td class="${s.open?'open':''}">${s.open?'Open':'Closed'}</td>
@@ -251,36 +259,27 @@ const V = {
 
 // User joins a queue
 
-function join(id){ const s = svc(id); s.q.push('You'); S.my = id; notify('You joined ' + s.name + '. Position #' + pos(s)); render(); }
+async function join(id){ const s = svc(id); s.q.push('You'); S.my = id; const p = pos(s); await recordQueueActivity('queue_joined', s, p); if(p === 1) await recordQueueActivity('next_in_line', s); render(); }
  
 // User leaves their queue -> saved to history
 
-function leave(){
-
+async function leave(){
   const s = svc(S.my);
-
+  if(!s) return;
   s.q = s.q.filter(n => n != 'You');
-
-  S.hist.unshift({d: today(), s: s.name, o: 'Left queue'});
-
-  S.my = null; toast('You left the queue'); render();
-
+  S.my = null;
+  await recordQueueActivity('queue_left', s);
+  toast('You left the queue'); render();
 }
  
 // Serve the next person. If that was "You", status becomes Served; if You are now first, "almost ready"
 
-function serve(id){
-
+async function serve(id){
   const s = svc(id), n = s.q.shift();
-
-  if(n == 'You'){ S.hist.unshift({d: today(), s: s.name, o: 'Served'}); S.my = null; notify('Status: Served. Thank you! 💖'); }
-
-  else if(n && pos(s) == 1) notify('Almost ready - you are next in ' + s.name + '!');
-
+  if(n == 'You'){ S.my = null; await recordQueueActivity('served', s); toast('Status: Served. Thank you! 💖'); }
+  else if(n && pos(s) == 1) await recordQueueActivity('next_in_line', s);
   else if(n) notify('Queue updated: ' + n + ' was served.');
-
   render();
-
 }
  
 // Admin opens/closes a queue

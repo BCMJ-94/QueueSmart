@@ -40,6 +40,10 @@ VS Code Live Server extension.
 | `POST` | `/api/auth/login` | Sign in; returns a session token and public user |
 | `GET` | `/api/auth/me` | Get the signed-in user |
 | `POST` | `/api/auth/logout` | Revoke the current session token |
+| `GET` | `/api/notifications` | Current user's notifications and `unreadCount` |
+| `PATCH` | `/api/notifications/:id/read` | Mark one of the current user's notifications read |
+| `PATCH` | `/api/notifications/read-all` | Mark all current user's notifications read |
+| `GET` | `/api/history` | Current user's queue activity history |
 
 Send data as JSON. Authenticated endpoints require `Authorization: Bearer <token>`.
 Registration expects a valid email (max 254 characters) and a password of 8–128

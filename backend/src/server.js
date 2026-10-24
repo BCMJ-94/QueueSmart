@@ -1,7 +1,7 @@
 import { createApp } from './app.js'
 import { createAuthService } from './authService.js'
-import { createQueueService } from './queueService.js'
-//import services module here
+import { createNotificationService } from './notificationService.js'
+import { createHistoryService } from './historyService.js'
 
 const port = Number(process.env.PORT ?? 3001)
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
@@ -19,14 +19,10 @@ if (adminEmail && adminPassword) {
   await authService.seedAdministrator({ email: adminEmail, password: adminPassword })
 }
 
-const app = createApp({ authService, frontendOrigin: process.env.FRONTEND_ORIGIN })
+const notificationService = createNotificationService()
+const historyService = createHistoryService()
+const app = createApp({ authService, frontendOrigin: process.env.FRONTEND_ORIGIN, notificationService, historyService })
 
 app.listen(port, () => {
   console.log(`QueueSmart API listening on http://localhost:${port}`)
-})
-
-const queueService = createQueueService({
-  getService: (id) => { try { return catalogService.get(id) } catch { return undefined } }, //catalogService is a dummy reference until the services module is added
-  recordHistory: (event) => historyService.record(event),
-  getUserEmail: (userId) => authService.getUserById(userId)?.email,
 })

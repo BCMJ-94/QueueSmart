@@ -2,12 +2,15 @@ import cors from 'cors'
 import express from 'express'
 import { AuthError } from './authService.js'
 import { requireAuthentication } from './authMiddleware.js'
+import { createNotificationService } from './notificationService.js'
+import { createHistoryService } from './historyService.js'
+import { createNotificationHistoryRoutes } from './notificationHistoryRoutes.js'
 
 // Allows the front end when it is served from any localhost port
 // (VS Code Live Server, npx serve, etc.) plus an optional configured origin.
 const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/
 
-export function createApp({ authService, frontendOrigin } = {}) {
+export function createApp({ authService, frontendOrigin, notificationService = createNotificationService(), historyService = createHistoryService() } = {}) {
   if (!authService) {
     throw new Error('An authentication service is required.')
   }
@@ -48,8 +51,11 @@ export function createApp({ authService, frontendOrigin } = {}) {
     response.status(204).end()
   })
 
-  // ---------- Other modules mount their routes here ----------
-  // e.g. app.use('/api/services', requireAuth, createServiceRoutes({ ... }))
+  // ---------- Notifications and history ----------
+  app.use('/api', createNotificationHistoryRoutes({ notificationService, historyService, requireAuth }))
+
+  // Queue module routes can use these same service instances so queue events
+  // create durable-for-this-process history and notifications.
 
   app.use('/api', (request, response) => {
     response.status(404).json({ message: 'Not found.' })
@@ -83,5 +89,8 @@ export function createApp({ authService, frontendOrigin } = {}) {
     return response.status(500).json({ message: 'An unexpected server error occurred.' })
   })
 
+  // Expose service instances for module composition and focused integration tests.
+  app.locals.notificationService = notificationService
+  app.locals.historyService = historyService
   return app
 }
