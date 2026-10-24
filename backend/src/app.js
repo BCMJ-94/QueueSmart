@@ -5,12 +5,14 @@ import { requireAuthentication } from './authMiddleware.js'
 import { createNotificationService } from './notificationService.js'
 import { createHistoryService } from './historyService.js'
 import { createNotificationHistoryRoutes } from './notificationHistoryRoutes.js'
+import { QueueError } from './queueService.js'
+import { createQueueRoutes } from './queueRoutes.js'
 
 // Allows the front end when it is served from any localhost port
 // (VS Code Live Server, npx serve, etc.) plus an optional configured origin.
 const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/
 
-export function createApp({ authService, frontendOrigin, notificationService = createNotificationService(), historyService = createHistoryService() } = {}) {
+export function createApp({ authService, catalogService = createCatalogService(), queueService, frontendOrigin, notificationService = createNotificationService(), historyService = createHistoryService() } = {}) {
   if (!authService) {
     throw new Error('An authentication service is required.')
   }
@@ -51,6 +53,13 @@ export function createApp({ authService, frontendOrigin, notificationService = c
     response.status(204).end()
   })
 
+  // ---------- Queue module ----------
+  // Only mounted when a queueService is passed in, so callers that don't use queues
+  // (like the existing tests) keep working.
+  if (queueService) {
+    app.use('/api/queues', requireAuth, createQueueRoutes({ queueService }))
+  }
+
   // ---------- Notifications and history ----------
   app.use('/api', createNotificationHistoryRoutes({ notificationService, historyService, requireAuth }))
 
@@ -66,7 +75,7 @@ export function createApp({ authService, frontendOrigin, notificationService = c
       return next(error)
     }
 
-    if (error instanceof AuthError) {
+    if (error instanceof AuthError || error instanceof ServiceError || error instanceof QueueError) {
       return response.status(error.status).json({
         message: error.message,
         ...(error.errors ? { errors: error.errors } : {}),

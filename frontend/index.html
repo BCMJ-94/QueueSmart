@@ -47,6 +47,8 @@ table{width:100%;border-collapse:collapse}td,th{text-align:left;padding:9px;bord
 </style></head><body>
 <div id="root"></div><div id="toast"></div>
 
+<!-- API calls for services and queues; uses api() from the script below, so keep it before it -->
+<script src="queueApi.js"></script>
 <script>
 /* ==========================================================
    QueueSmart front-end - plain HTML/CSS/JS
@@ -259,8 +261,20 @@ const V = {
 
 // User joins a queue
 
-async function join(id){ const s = svc(id); s.q.push('You'); S.my = id; const p = pos(s); await recordQueueActivity('queue_joined', s, p); if(p === 1) await recordQueueActivity('next_in_line', s); render(); }
- 
+async function join(id){
+  try {
+    const { entry } = await queueApi.join(id);          // POST /api/queues/:id/join (no body: the token says who you are)
+    const s = svc(id);
+    // Temporary: the other screens still read s.q, so mirror the server's position there
+    s.q = s.q.filter(n => n != 'You');
+    s.q.splice(entry.position - 1, 0, 'You');
+    S.my = id;
+    notify('You joined ' + s.name + '. Position #' + entry.position);
+  } catch(err){
+    toast(err.status ? err.message : 'Cannot reach the server.');   // 404 unknown service, 409 closed / already queued
+  }
+  render();
+} 
 // User leaves their queue -> saved to history
 
 async function leave(){
