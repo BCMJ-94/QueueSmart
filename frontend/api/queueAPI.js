@@ -12,7 +12,7 @@ const fromApiService = (s) => ({
   dur: s.duration,
   pri: s.priority,
   open: s.open,
-  q: [],   // filled in once the queue endpoints exist (see queueLength below)
+  q: [],   
 })
 
 const toApiService = (s) => ({
@@ -23,16 +23,15 @@ const toApiService = (s) => ({
 })
 
 const queueApi = {
-  // ---------- Services (built: GET/POST/PATCH /api/services) ----------
   async listServices() {
     const { services } = await api('/api/services')
     return services.map(fromApiService)
   },
-  async createService(fields) {                       // fields: { name, desc, dur, pri }
+  async createService(fields) {    
     const { service } = await api('/api/services', { method: 'POST', body: toApiService(fields) })
     return fromApiService(service)
   },
-  async updateService(id, fields) {                   // fields: any of { name, desc, dur, pri }
+  async updateService(id, fields) {                
     const body = {}
     if (fields.name !== undefined) body.name = fields.name
     if (fields.desc !== undefined) body.description = fields.desc
