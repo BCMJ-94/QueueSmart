@@ -26,3 +26,9 @@ const app = createApp({ authService, frontendOrigin: process.env.FRONTEND_ORIGIN
 app.listen(port, () => {
   console.log(`QueueSmart API listening on http://localhost:${port}`)
 })
+
+const queueService = createQueueService({
+  getService: (id) => { try { return catalogService.get(id) } catch { return undefined } }, //catalogService is a dummy reference until the services module is added
+  recordHistory: (event) => historyService.record(event),
+  getUserEmail: (userId) => authService.getUserById(userId)?.email,
+})
