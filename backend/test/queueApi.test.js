@@ -83,9 +83,21 @@ async function newService(changes = {}) {
     token: adminToken,
     json: { name: `Service ${++counter}`, description: 'Test service', duration: 10, priority: 'medium', ...changes },
   })
-  return (await response.json()).service
-}
+  const service = (await response.json()).service
 
+  // Services start closed, so open them for queue tests.
+  const statusResponse = await request(`/api/services/${service.id}/status`, {
+    method: 'PATCH',
+    token: adminToken,
+    json: { status: 'open' },
+  })
+
+  if (!statusResponse.ok) {
+    throw new Error(`Failed to open test service ${service.id}: ${statusResponse.status}`)
+  }
+
+  return { ...service, status: 'open' }
+}
 const join = (user, service) => request(`/api/queues/${service.id}/join`, { method: 'POST', token: user.token })
 const list = (service) => request(`/api/queues/${service.id}`, { token: adminToken })
 const historyFor = (user) => history.filter((event) => event.userId === user.id).map((event) => event.outcome)
@@ -184,7 +196,7 @@ test('join returns 404 for an unknown service and 409 when closed or already que
   assert.equal((await request('/api/queues/abc/join', { method: 'POST', token: user.token })).status, 404)
 
   const closed = await newService()
-  await request(`/api/services/${closed.id}`, { method: 'PATCH', token: adminToken, json: { open: false } })
+  await request(`/api/services/${closed.id}/status`, { method: 'PATCH', token: adminToken, json: { status: 'closed' } })
   const closedJoin = await join(user, closed)
   assert.equal(closedJoin.status, 409)
   assert.equal((await closedJoin.json()).message, 'This queue is closed.')
@@ -330,7 +342,7 @@ test('closing a service blocks new joins but the people waiting can still be ser
   const service = await newService()
   await join(waiting, service)
 
-  await request(`/api/services/${service.id}`, { method: 'PATCH', token: adminToken, json: { open: false } })
+  await request(`/api/services/${service.id}/status`, { method: 'PATCH', token: adminToken, json: { status: 'closed' } })
   assert.equal((await join(late, service)).status, 409)
   const served = await request(`/api/queues/${service.id}/serve-next`, { method: 'POST', token: adminToken })
   assert.equal(served.status, 200)
