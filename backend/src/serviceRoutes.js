@@ -5,7 +5,7 @@ import {
   requireAuthentication,
   requireAdministrator,
 } from './authMiddleware.js'
-import { createServiceService } from './serviceService.js'
+import { isUniqueViolation } from './db.js'
 
 const SERVICE_RULES = {
   name: {
@@ -17,6 +17,7 @@ const SERVICE_RULES = {
     required: true,
     type: 'string',
     minLength: 1,
+      maxLength: 500,
   },
   duration: {
     required: true,
@@ -74,10 +75,14 @@ function validateAllowedFields(body, allowedFields) {
 
 export function createServiceRoutes({
   authService,
-  serviceService = createServiceService(),
+  serviceService,
 } = {}) {
   if (!authService) {
     throw new Error('An authentication service is required.')
+  }
+
+  if (!serviceService) {
+      throw new Error('A service database implementation is required.')
   }
 
   const router = express.Router()
@@ -120,8 +125,18 @@ export function createServiceRoutes({
         return sendValidationError(response, errors)
       }
 
-      const service = serviceService.create(body)
-      return response.status(201).json({ service })
+      try {
+        const service = serviceService.create(body)
+        return response.status(201).json({ service })
+      } catch (error) {
+        if (isUniqueViolation(error)) {
+            return response.status(409).json({
+                message: 'A service with this name already exists.',
+            })
+        }
+
+        throw error
+      }
     },
   )
 
@@ -168,7 +183,18 @@ export function createServiceRoutes({
         return sendValidationError(response, errors)
       }
 
-      const service = serviceService.update(request.params.id, body)
+      let service
+        try {
+            service = serviceService.update(request.params.id, body)
+        } catch (error) {
+            if (isUniqueViolation(error)) {
+                return response.status(409).json({
+                    message: 'A service with this name already exists.',
+                })
+            }
+
+            throw error
+        }
 
       if (!service) {
         return response.status(404).json({

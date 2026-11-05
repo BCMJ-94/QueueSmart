@@ -14,7 +14,7 @@ import { createServiceRoutes } from './serviceRoutes.js';
 // (VS Code Live Server, npx serve, etc.) plus an optional configured origin.
 const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/
 
-export function createApp({ authService, serviceService = createServiceService(), queueService, frontendOrigin, notificationService = createNotificationService(), historyService = createHistoryService() } = {}) {
+export function createApp({ authService, db, serviceService = createServiceService(db), queueService, frontendOrigin, notificationService = createNotificationService(), historyService = createHistoryService() } = {}) {
   if (!authService) {
     throw new Error('An authentication service is required.')
   }

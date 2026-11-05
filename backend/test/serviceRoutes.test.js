@@ -3,6 +3,7 @@ import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createApp } from '../src/app.js'
 import { ROLES } from '../src/authService.js'
+import { openDatabase } from '../src/db.js'
 
 const admin = {
   id: 'admin-1',
@@ -28,7 +29,8 @@ async function withServer(run) {
     },
   }
 
-  const app = createApp({ authService })
+  const db = openDatabase(':memory:')
+  const app = createApp({ authService, db })
   const server = app.listen(0)
 
   await new Promise((resolve, reject) => {
@@ -73,9 +75,13 @@ async function withServer(run) {
   try {
     await run(request)
   } finally {
+    //Close HTTP Server
     await new Promise((resolve, reject) => {
       server.close(error => error ? reject(error) : resolve())
     })
+
+    //Close SQLite Database
+    db.close()
   }
 }
 
@@ -313,5 +319,59 @@ test('regular users cannot change service status', async () => {
     })
 
     assert.equal(result.status, 403)
+  })
+})
+
+test('administrator cannot create duplicate service names', async () => {
+  await withServer(async request => {
+    const first = await request('/api/services', {
+      method: 'POST',
+      token: 'admin-token',
+      body: validService,
+    })
+
+    assert.equal(first.status, 201)
+
+    const second = await request('/api/services', {
+      method: 'POST',
+      token: 'admin-token',
+      body: validService,
+    })
+
+    assert.equal(second.status, 409)
+    assert.match(
+      second.body.message,
+      /already exists/
+    )
+  })
+})
+
+test('update rejects duplicate service names', async () => {
+  await withServer(async request => {
+    const first = await request('/api/services', {
+      method: 'POST',
+      token: 'admin-token',
+      body: validService,
+    })
+
+    const second = await request('/api/services', {
+      method: 'POST',
+      token: 'admin-token',
+      body: {
+        ...validService,
+        name: 'Registration',
+      },
+    })
+
+    const result = await request(
+      `/api/services/${second.body.service.id}`,
+      {
+        method: 'PUT',
+        token: 'admin-token',
+        body: { name: 'Consultation' },
+      }
+    )
+
+    assert.equal(result.status, 409)
   })
 })

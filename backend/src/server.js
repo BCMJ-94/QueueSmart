@@ -2,17 +2,19 @@ import { createApp } from './app.js'
 import { createAuthService } from './authService.js'
 import { createNotificationService } from './notificationService.js'
 import { createHistoryService } from './historyService.js'
+import { openDatabase } from './db.js'
+import { createServiceService } from './serviceService.js'
+import { createQueueService } from "./queueService.js";
 
-const { createServiceService } = require('./serviceService');
-
-const serviceService = createServiceService()
 
 const port = Number(process.env.PORT ?? 3001)
 if (!Number.isInteger(port) || port < 1 || port > 65535) {
   throw new Error('PORT must be a valid TCP port.')
 }
 
+const db = openDatabase()
 const authService = createAuthService()
+const serviceService = createServiceService(db)
 const adminEmail = process.env.ADMIN_EMAIL
 const adminPassword = process.env.ADMIN_PASSWORD
 
@@ -25,7 +27,7 @@ if (adminEmail && adminPassword) {
 
 const notificationService = createNotificationService()
 const historyService = createHistoryService()
-const app = createApp({ authService, frontendOrigin: process.env.FRONTEND_ORIGIN, notificationService, historyService })
+const app = createApp({ authService, db, serviceService, frontendOrigin: process.env.FRONTEND_ORIGIN, notificationService, historyService })
 
 app.listen(port, () => {
   console.log(`QueueSmart API listening on http://localhost:${port}`)
@@ -36,3 +38,13 @@ const queueService = createQueueService({
   recordHistory: (event) => historyService.record(event),
   getUserEmail: (userId) => authService.getUserById(userId)?.email,
 })
+
+function shutdown() {
+  server.close(() => {
+    db.close()
+    console.log('QueueSmart API server and database connection closed.')
+  })
+}
+
+process.on('SIGINT', shutdown)
+process.on('SIGTERM', shutdown)

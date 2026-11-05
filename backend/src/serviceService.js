@@ -2,74 +2,129 @@
 import { randomUUID } from 'node:crypto'
 
 const VALID_STATUSES = ['open', 'closed']
+const EDITABLE_FIELDS = ['name', 'description', 'duration', 'priority']
 
-export function createServiceService() {
-  const services = new Map()
-
-  function list() {
-    return Array.from(services.values(), service => ({ ...service }))
+export function createServiceService(db) {
+  if (!db) {
+    throw new TypeError('A database connection is required.')
   }
 
-  function getById(id) {
-    const service = services.get(id)
-    return service ? { ...service } : null
-  }
+  // Convert SQLite column names to the existing API response format.
+  function mapService(row) {
+    if (!row) return null
 
-  function create(data) {
-    const now = new Date().toISOString()
-
-    const service = {
-      id: randomUUID(),
-      name: data.name.trim(),
-      description: data.description.trim(),
-      duration: data.duration,
-      priority: data.priority,
-      status: 'closed',
-      createdAt: now,
-      updatedAt: now,
+    return {
+      id: row.service_id,
+      name: row.name,
+      description: row.description,
+      duration: row.duration,
+      priority: row.priority,
+      status: row.status,
+      createdAt: row.created_at,
+      updatedAt: row.updated_at,
     }
-
-    services.set(service.id, service)
-    return { ...service }
   }
 
+  // GET all services.
+  function list() {
+    const rows = db.prepare(`
+      SELECT *
+      FROM Service
+      ORDER BY created_at ASC
+    `).all()
+
+    return rows.map(mapService)
+  }
+
+  // GET one service by ID.
+  function getById(id) {
+    const row = db.prepare(`
+      SELECT *
+      FROM Service
+      WHERE service_id = ?
+    `).get(id)
+
+    return mapService(row)
+  }
+
+  // CREATE a service.
+  function create(data) {
+    const id = randomUUID()
+
+    db.prepare(`
+      INSERT INTO Service (
+        service_id,
+        name,
+        description,
+        duration,
+        priority
+      )
+      VALUES (?, ?, ?, ?, ?)
+    `).run(
+      id,
+      data.name.trim(),
+      data.description.trim(),
+      data.duration,
+      data.priority
+    )
+
+    return getById(id)
+  }
+
+  // UPDATE an existing service.
   function update(id, changes) {
-    const existing = services.get(id)
+    const existing = getById(id)
+
     if (!existing) return null
 
-    const updated = { ...existing }
+    const fields = EDITABLE_FIELDS.filter(
+      field => changes[field] !== undefined
+    )
 
-    for (const field of ['name', 'description', 'duration', 'priority']) {
-      if (changes[field] !== undefined) {
-        updated[field] =
-          typeof changes[field] === 'string'
-            ? changes[field].trim()
-            : changes[field]
-      }
+    if (fields.length === 0) {
+      return existing
     }
 
-    updated.updatedAt = new Date().toISOString()
-    services.set(id, updated)
+    const values = fields.map(field => {
+      const value = changes[field]
 
-    return { ...updated }
+      return typeof value === 'string'
+        ? value.trim()
+        : value
+    })
+
+    const assignments = fields.map(
+      field => `${field} = ?`
+    )
+
+    db.prepare(`
+      UPDATE Service
+      SET ${assignments.join(', ')},
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE service_id = ?
+    `).run(...values, id)
+
+    return getById(id)
   }
 
+  // OPEN or CLOSE a service.
   function setStatus(id, status) {
     if (!VALID_STATUSES.includes(status)) {
       throw new TypeError('Invalid service status.')
     }
 
-    const existing = services.get(id)
-    if (!existing) return null
+    const result = db.prepare(`
+      UPDATE Service
+      SET status = ?,
+          updated_at = strftime('%Y-%m-%dT%H:%M:%fZ', 'now')
+      WHERE service_id = ?
+    `).run(status, id)
 
-    const updated = {
-      ...existing,
-      status,
-      updatedAt: new Date().toISOString(),
+    if (result.changes === 0) {
+      return null
     }
 
-    services.set(id, updated)
-    return { ...updated }
+    return getById(id)
   }
 
   return {

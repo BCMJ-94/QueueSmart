@@ -2,6 +2,13 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
 import { createServiceService } from '../src/serviceService.js'
+import { openDatabase } from '../src/db.js'
+
+
+function createTestServiceService() {
+  const db = openDatabase(':memory:')
+  return createServiceService(db)
+}
 
 function validService(overrides = {}) {
   return {
@@ -14,7 +21,7 @@ function validService(overrides = {}) {
 }
 
 test('creates a service with an ID, timestamps, and closed status', () => {
-  const serviceService = createServiceService()
+  const serviceService = createTestServiceService()
 
   const service = serviceService.create(validService())
 
@@ -27,7 +34,7 @@ test('creates a service with an ID, timestamps, and closed status', () => {
 })
 
 test('trims name and description when creating a service', () => {
-  const serviceService = createServiceService()
+  const serviceService = createTestServiceService()
 
   const service = serviceService.create(validService({
     name: '  Passport Service  ',
@@ -39,7 +46,7 @@ test('trims name and description when creating a service', () => {
 })
 
 test('creates services with unique IDs', () => {
-  const serviceService = createServiceService()
+  const serviceService = createTestServiceService()
 
   const first = serviceService.create(validService())
   const second = serviceService.create(validService({
@@ -51,7 +58,7 @@ test('creates services with unique IDs', () => {
 })
 
 test('returns null for an unknown service ID', () => {
-  const serviceService = createServiceService()
+  const serviceService = createTestServiceService()
 
   assert.equal(serviceService.getById('missing-id'), null)
   assert.equal(serviceService.update('missing-id', { name: 'New' }), null)
@@ -59,7 +66,7 @@ test('returns null for an unknown service ID', () => {
 })
 
 test('updates supplied fields while preserving other fields', () => {
-  const serviceService = createServiceService()
+  const serviceService = createTestServiceService()
   const original = serviceService.create(validService())
 
   const updated = serviceService.update(original.id, {
@@ -75,7 +82,7 @@ test('updates supplied fields while preserving other fields', () => {
 })
 
 test('opens and closes a service', () => {
-  const serviceService = createServiceService()
+  const serviceService = createTestServiceService()
   const service = serviceService.create(validService())
 
   const opened = serviceService.setStatus(service.id, 'open')
@@ -86,7 +93,7 @@ test('opens and closes a service', () => {
 })
 
 test('rejects invalid service statuses', () => {
-  const serviceService = createServiceService()
+  const serviceService = createTestServiceService()
 
   assert.throws(
     () => serviceService.setStatus('any-id', 'pending'),
@@ -95,7 +102,7 @@ test('rejects invalid service statuses', () => {
 })
 
 test('returned objects cannot mutate stored services', () => {
-  const serviceService = createServiceService()
+  const serviceService = createTestServiceService()
   const service = serviceService.create(validService())
 
   service.name = 'Tampered'
