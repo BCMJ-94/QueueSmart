@@ -38,7 +38,7 @@ const queueApi = {
     if (fields.desc !== undefined) body.description = fields.desc
     if (fields.dur !== undefined) body.duration = fields.dur
     if (fields.pri !== undefined) body.priority = fields.pri
-    const { service } = await api(`/api/services/${id}`, { method: 'PUT', body: toAPIService(fields) })
+    const { service } = await api(`/api/services/${id}`, { method: 'PUT', body: toApiService(fields) })
     return fromApiService(service)
   },
   async setServiceOpen(id, open) {                    // replaces tog()

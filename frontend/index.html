@@ -254,7 +254,7 @@ const V = {
  // ADMIN: services, queue lengths, open/close quick action
  adash(){ return `<h2>Admin Dashboard 🏠</h2><div class="card"><table><tr><th>Service</th><th>Queue length</th><th>Status</th><th>Action</th></tr>
    ${S.svcs.map(s => `<tr><td>${s.name}</td><td>${s.q.length}</td><td class="${s.open?'open':''}">${s.open?'Open':'Closed'}</td>
-<td><button class="btn" onclick="tog(${s.id})">${s.open?'Close':'Open'} queue</button></td></tr>`).join('')}</table></div>`; },
+<td><button class="btn" onclick="tog('${s.id}')">${s.open?'Close':'Open'} queue</button></td></tr>`).join('')}</table></div>`; },
  // ADMIN: create / edit services (with validation in saveSvc)
  svcm(){
    const e = S.edit || {name:'', desc:'', dur:'', pri:'medium'};      // blank form when creating
@@ -262,7 +262,7 @@ const V = {
 <div class="card"><table><tr><th>Service</th><th>Duration</th><th>Priority</th><th>Status</th><th></th></tr>
      ${S.svcs.map(s => `<tr><td>${escapeHtml(s.name)}</td><td>${s.dur} min</td><td class="${s.pri}">${escapeHtml(s.pri)}</td>
     <td class="${s.open ? 'open' : ''}"> ${s.open ? 'Open' : 'Closed'}</td>
-<td><button class="btn" onclick="S.edit={...svc(${s.id})};render()">Edit</button></td></tr>`).join('')}</table></div>
+<td><button class="btn" onclick="editSvc('${s.id}');render()">Edit</button></td></tr>`).join('')}</table></div>
 <div class="card"><h3>${e.id ? 'Edit' : 'Create'} service</h3>
 <!-- plain <div>, not <form>, for the same sandboxed-iframe reason as the login screen -->
 <div>
@@ -374,6 +374,25 @@ async function leave(){
       await loadQueue(id);
       notify(entry.email + ' was removed from ' + s.name);
     } catch(err){ fail(err); }
+    render();
+  }
+
+//Edit queue button potential fix
+  function editSvc(id) {
+    const service = svc(id);
+
+    if (!service) {
+        toast('Service not found. Please refresh the service list.');
+        return;
+    }
+
+    S.edit = {
+        id: service.id,
+        name: service.name,
+        desc: service.desc,
+        dur: service.dur,
+        pri: service.pri
+    };
     render();
   }
 
