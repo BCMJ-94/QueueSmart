@@ -2,6 +2,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import { createApp } from '../src/app.js'
+import { createServiceRoutes } from '../src/serviceRoutes.js'
 import { ROLES } from '../src/authService.js'
 import { openDatabase } from '../src/db.js'
 
@@ -373,5 +374,145 @@ test('update rejects duplicate service names', async () => {
     )
 
     assert.equal(result.status, 409)
+  })
+})
+
+async function createService(request, overrides = {}) {
+  const created = await request('/api/services', {
+    method: 'POST',
+    token: 'admin-token',
+    body: { ...validService, ...overrides },
+  })
+  assert.equal(created.status, 201)
+  return created.body.service
+}
+
+test('createServiceRoutes requires an auth service and a service implementation', () => {
+  assert.throws(() => createServiceRoutes(), /authentication service is required/)
+  assert.throws(
+    () => createServiceRoutes({ authService: {} }),
+    /service database implementation is required/,
+  )
+})
+
+test('create rejects unknown fields', async () => {
+  await withServer(async request => {
+    const result = await request('/api/services', {
+      method: 'POST',
+      token: 'admin-token',
+      body: { ...validService, status: 'open', extra: 1 },
+    })
+
+    assert.equal(result.status, 400)
+    assert.equal(result.body.message, 'Validation failed.')
+    assert.equal(result.body.errors.status, 'Unknown field: status.')
+    assert.equal(result.body.errors.extra, 'Unknown field: extra.')
+  })
+})
+
+test('create, update, and status reject a JSON body that is not an object', async () => {
+  await withServer(async request => {
+    const service = await createService(request)
+
+    for (const [path, method] of [
+      ['/api/services', 'POST'],
+      [`/api/services/${service.id}`, 'PUT'],
+      [`/api/services/${service.id}/status`, 'PATCH'],
+    ]) {
+      const result = await request(path, { method, token: 'admin-token', body: [] })
+      assert.equal(result.status, 400, `${method} ${path}`)
+      assert.equal(result.body.message, 'Request body must be a JSON object.')
+    }
+  })
+})
+
+test('update rejects unknown fields and does not change the service', async () => {
+  await withServer(async request => {
+    const service = await createService(request)
+
+    const result = await request(`/api/services/${service.id}`, {
+      method: 'PUT',
+      token: 'admin-token',
+      body: { name: 'Renamed', status: 'open' },
+    })
+
+    assert.equal(result.status, 400)
+    assert.equal(result.body.errors.status, 'Unknown field: status.')
+
+    const listed = await request('/api/services', { token: 'admin-token' })
+    assert.equal(listed.body.services[0].name, 'Consultation')
+  })
+})
+
+test('update validates only the supplied fields', async () => {
+  await withServer(async request => {
+    const service = await createService(request)
+
+    const bad = await request(`/api/services/${service.id}`, {
+      method: 'PUT',
+      token: 'admin-token',
+      body: { duration: 0 },
+    })
+    assert.equal(bad.status, 400)
+    assert.ok(bad.body.errors.duration)
+
+    const good = await request(`/api/services/${service.id}`, {
+      method: 'PUT',
+      token: 'admin-token',
+      body: { priority: 'high' },
+    })
+    assert.equal(good.status, 200)
+    assert.equal(good.body.service.priority, 'high')
+    assert.equal(good.body.service.name, 'Consultation')
+  })
+})
+
+test('status endpoint rejects unknown fields and a missing status', async () => {
+  await withServer(async request => {
+    const service = await createService(request)
+    const path = `/api/services/${service.id}/status`
+
+    const unknown = await request(path, {
+      method: 'PATCH',
+      token: 'admin-token',
+      body: { status: 'open', extra: true },
+    })
+    assert.equal(unknown.status, 400)
+    assert.equal(unknown.body.errors.extra, 'Unknown field: extra.')
+
+    const missing = await request(path, {
+      method: 'PATCH',
+      token: 'admin-token',
+      body: {},
+    })
+    assert.equal(missing.status, 400)
+    assert.ok(missing.body.errors.status)
+  })
+})
+
+test('status endpoint returns 404 for an unknown service', async () => {
+  await withServer(async request => {
+    const result = await request('/api/services/does-not-exist/status', {
+      method: 'PATCH',
+      token: 'admin-token',
+      body: { status: 'open' },
+    })
+
+    assert.equal(result.status, 404)
+    assert.equal(result.body.message, 'Service not found.')
+  })
+})
+
+test('regular users cannot update services', async () => {
+  await withServer(async request => {
+    const service = await createService(request)
+
+    const result = await request(`/api/services/${service.id}`, {
+      method: 'PUT',
+      token: 'user-token',
+      body: { name: 'Hacked' },
+    })
+
+    assert.equal(result.status, 403)
   })
 })

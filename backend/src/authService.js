@@ -32,16 +32,23 @@ function publicUser(user) {
   return { id: user.id, email: user.email, role: user.role }
 }
 
-export function createAuthService() {
+export function createAuthService({ db } = {}) {
   const usersByEmail = new Map()
   const usersById = new Map()
   const sessions = new Map()   // token -> user id
+  if (db) {
+    for (const row of db.prepare('SELECT user_id, email, role, password_salt, password_hash FROM UserCredentials').all()) {
+      const user = { id: row.user_id, email: row.email, role: row.role, salt: row.password_salt, passwordHash: row.password_hash }
+      usersByEmail.set(user.email, user)
+      usersById.set(user.id, user)
+    }
+  }
 
   // Used when the email is unknown, so a failed login takes the same time either way
   const dummySalt = randomBytes(16).toString('hex')
   const dummyHash = hashPassword('no-account-password', dummySalt)
 
-  async function addUser({ email, password, role }) {
+  async function addUser({ email, password, role, fullName }) {
     const normalizedEmail = email.trim().toLowerCase()
     if (usersByEmail.has(normalizedEmail)) {
       throw new AuthError(409, 'An account with this email already exists.')
@@ -56,6 +63,13 @@ export function createAuthService() {
       passwordHash: await hashPassword(password, salt),
     }
 
+    if (db) {
+      db.prepare(`INSERT INTO UserCredentials (user_id, email, password_salt, password_hash, role)
+        VALUES (?, ?, ?, ?, ?)`).run(user.id, user.email, user.salt, user.passwordHash, user.role)
+      if (typeof fullName === 'string' && fullName.trim()) {
+        db.prepare('INSERT INTO UserProfile (email, full_name) VALUES (?, ?)').run(user.email, fullName.trim())
+      }
+    }
     usersByEmail.set(user.email, user)
     usersById.set(user.id, user)
     return user
@@ -75,7 +89,7 @@ export function createAuthService() {
         throw new AuthError(400, 'Check the registration details and try again.', errors)
       }
 
-      const user = await addUser({ email: input.email, password: input.password, role: ROLES.USER })
+      const user = await addUser({ email: input.email, password: input.password, role: ROLES.USER, fullName: input.fullName })
       return createSession(user)
     },
 
@@ -96,6 +110,11 @@ export function createAuthService() {
       }
 
       return createSession(user)
+    },
+
+    getUserById(id) {
+      const user = usersById.get(id)
+      return user ? publicUser(user) : null
     },
 
     getUserForToken(token) {

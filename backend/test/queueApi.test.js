@@ -3,15 +3,17 @@ import { after, before, test } from 'node:test'
 import { createApp } from '../src/app.js'
 import { createAuthService } from '../src/authService.js'
 import { createQueueService } from '../src/queueService.js'
-import { createServiceService } from "../src/serviceService.js";
+import { createServiceService } from '../src/serviceService.js'
+import { openDatabase } from '../src/db.js'
 //note: this test will not run until the service module is added and the appropriate calls are modified accordingly
 //however, tests using dummy functions did pass
 
 // Real HTTP requests against the app running on a random local port.
 // The queue service is wired the way server.js will wire it: it reads services from the
 // catalog, records history into an array, and looks up emails from the users made here.
-const authService = createAuthService()
-const serviceService = createServiceService()
+const db = openDatabase(':memory:')
+const authService = createAuthService({ db })
+const serviceService = createServiceService(db)
 const emails = new Map()   // user id -> email
 const history = []
 
@@ -28,8 +30,8 @@ const queueService = createQueueService({
   recordHistory: (event) => history.push(event),
   getUserEmail: (userId) => emails.get(userId),
 })
-const app = createApp({ authService, serviceService, queueService })
-const appWithoutQueues = createApp({ authService })
+const app = createApp({ authService, db, serviceService, queueService })
+const appWithoutQueues = createApp({ authService, db, serviceService })
 
 let server
 let serverWithoutQueues
@@ -218,7 +220,7 @@ test('leaving returns 204, frees the user, and records history; leaving again is
   const left = await request('/api/queues/me', { method: 'DELETE', token: user.token })
   assert.equal(left.status, 204)
   assert.deepEqual(await (await request('/api/queues/me', { token: user.token })).json(), { entry: null })
-  assert.deepEqual(historyFor(user), ['Left queue'])
+  assert.deepEqual(historyFor(user), ['Joined queue', 'Left queue'])
 
   const again = await request('/api/queues/me', { method: 'DELETE', token: user.token })
   assert.equal(again.status, 409)
@@ -255,7 +257,7 @@ test('serve-next serves the first person, moves the next up, and records history
 
   assert.deepEqual(await (await request('/api/queues/me', { token: first.token })).json(), { entry: null })
   assert.equal((await (await request('/api/queues/me', { token: second.token })).json()).entry.position, 1)
-  assert.deepEqual(historyFor(first), ['Served'])
+  assert.deepEqual(historyFor(first), ['Joined queue', 'Served'])
 })
 
 test('serve-next returns 409 for an empty queue and 404 for an unknown service', async () => {
@@ -280,7 +282,7 @@ test('remove takes someone out with 204, shifts the rest up, and records "Remove
   const { entries } = await (await list(service)).json()
   assert.deepEqual(entries.map((entry) => entry.email), [first.email, third.email])
   assert.equal((await (await request('/api/queues/me', { token: third.token })).json()).entry.position, 2)
-  assert.deepEqual(historyFor(second), ['Removed'])
+  assert.deepEqual(historyFor(second), ['Joined queue', 'Removed'])
 })
 
 test('remove returns 404 for an unknown entry, or for an entry in a different service', async () => {

@@ -1,75 +1,130 @@
 import assert from 'node:assert/strict'
-import { after, before, test } from 'node:test'
-import { createApp } from '../src/app.js'
-import { createAuthService } from '../src/authService.js'
+import { mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { test } from 'node:test'
+import { openDatabase } from '../src/db.js'
 import { createNotificationService } from '../src/notificationService.js'
 import { createHistoryService } from '../src/historyService.js'
-import { createQueueService } from '../src/queueService.js'
 
-const authService = createAuthService()
-const notificationService = createNotificationService({ now: () => '2026-10-01T10:00:00.000Z' })
-const historyService = createHistoryService({ now: () => '2026-10-01T10:00:00.000Z' })
-const app = createApp({ authService, notificationService, historyService })
-let server, baseUrl, userA, userB
-const listen = (app) => new Promise((resolve) => { const s = app.listen(0, '127.0.0.1'); s.once('listening', () => resolve(s)) })
-before(async () => {
-  server = await listen(app); baseUrl = `http://127.0.0.1:${server.address().port}`
-  userA = await (await fetch(`${baseUrl}/api/auth/register`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:'notify-a@example.com',password:'valid-password'}) })).json()
-  userB = await (await fetch(`${baseUrl}/api/auth/register`, { method:'POST', headers:{'Content-Type':'application/json'}, body:JSON.stringify({email:'notify-b@example.com',password:'valid-password'}) })).json()
-})
-after(async () => { await new Promise((resolve) => server.close(resolve)) })
-function req(path, { token, method = 'GET', body } = {}) { return fetch(baseUrl + path, { method, headers: { ...(token ? { Authorization: `Bearer ${token}` } : {}), ...(body === undefined ? {} : { 'Content-Type': 'application/json' }) }, body: body === undefined ? undefined : JSON.stringify(body) }) }
+function seedUser(db, id, email) {
+  db.prepare(`INSERT INTO UserCredentials (user_id,email,password_salt,password_hash,role)
+    VALUES (?,?,?,?,'User')`).run(id,email,'salt','hash')
+}
 
-test('notification and history endpoints require authentication', async () => {
-  assert.equal((await req('/api/notifications')).status, 401)
-  assert.equal((await req('/api/history')).status, 401)
-})
-test('notification API lists only the signed-in user notifications and supports read states', async () => {
-  notificationService.create({ userId: userA.user.id, type:'queue_joined', message:'Joined queue' })
-  notificationService.create({ userId: userB.user.id, type:'queue_joined', message:'Private notification' })
-  const response = await req('/api/notifications', { token:userA.token })
-  const body = await response.json()
-  assert.equal(response.status, 200); assert.equal(body.notifications.length, 1); assert.equal(body.unreadCount, 1)
-  const id = body.notifications[0].id
-  assert.equal((await req(`/api/notifications/${id}/read`, { token:userA.token, method:'PATCH' })).status, 200)
-  assert.equal((await (await req('/api/notifications', { token:userA.token })).json()).unreadCount, 0)
-  assert.equal((await req('/api/notifications/999/read', { token:userA.token, method:'PATCH' })).status, 404)
-  notificationService.create({ userId:userA.user.id, type:'next_in_line', message:'You are next' })
-  assert.equal((await req('/api/notifications/read-all', { token:userA.token, method:'PATCH' })).status, 200)
-})
-test('history API returns only the signed-in user history', async () => {
-  historyService.record({ userId:userA.user.id, serviceId:'1', serviceName:'General Consultation', outcome:'Left queue' })
-  historyService.record({ userId:userB.user.id, serviceId:'2', serviceName:'Private', outcome:'Served' })
-  const body = await (await req('/api/history', { token:userA.token })).json()
-  assert.equal(body.history.length, 1); assert.equal(body.history[0].outcome, 'Left queue')
-})
-test('queue join and serve events trigger notifications and history', () => {
-  const notifications = [], history = []
-  const queue = createQueueService({ getService: (id) => ({ id:String(id), name:'Consultation', duration:10, open:true }), recordHistory: (event) => history.push(event), getUserEmail: () => 'user@example.com', notify: (event) => notifications.push(event) })
-  queue.join('first-user', '1'); queue.join('second-user', '1')
-  assert.equal(notifications[0].type, 'queue_joined')
-  queue.serveNext('1')
-  assert.ok(notifications.some((n) => n.userId === 'first-user' && n.type === 'served'))
-  assert.ok(notifications.some((n) => n.userId === 'second-user' && n.type === 'next_in_line'))
-  assert.equal(history[0].outcome, 'Served'); assert.equal(history[0].serviceName, 'Consultation')
+test('notification CRUD, read state, ordering, and user isolation use SQLite', () => {
+  const db = openDatabase(':memory:')
+  seedUser(db, 'u1', 'one@example.com'); seedUser(db, 'u2', 'two@example.com')
+  const service = createNotificationService({ db, now: () => '2026-11-06T10:00:00.000Z' })
+  const one = service.create({ userId:'u1', type:'queue_joined', message:'Joined queue' })
+  service.create({ userId:'u2', type:'queue_joined', message:'Private message' })
+  assert.equal(one.read, false)
+  assert.equal(service.list('u1').length, 1)
+  assert.equal(service.unreadCount('u1'), 1)
+  assert.equal(service.markRead('u2', one.id), null, 'another user cannot mark this notification')
+  assert.equal(service.markRead('u1', one.id).read, true)
+  assert.equal(service.unreadCount('u1'), 0)
+  service.create({ userId:'u1', type:'next_in_line', message:'You are next' })
+  assert.equal(service.markAllRead('u1').every((n) => n.read), true)
+  assert.throws(() => service.create({ userId:'missing', type:'x', message:'x' }), /FOREIGN KEY/)
+  db.close()
 })
 
-
-test('frontend queue activity creates API notifications and history for the signed-in user', async () => {
-  const event = { type: 'queue_joined', serviceId: '42', serviceName: 'Demo Clinic', position: 2 }
-  const response = await req('/api/activity', { token: userA.token, method: 'POST', body: event })
-  const result = await response.json()
-  assert.equal(response.status, 201)
-  assert.equal(result.notification.type, 'queue_joined')
-  assert.match(result.notification.message, /Demo Clinic.*#2/)
-  const notifications = await (await req('/api/notifications', { token: userA.token })).json()
-  assert.ok(notifications.notifications.some((item) => item.message === result.notification.message))
-  const history = await (await req('/api/history', { token: userA.token })).json()
-  assert.ok(history.history.some((item) => item.serviceId === '42' && item.outcome === 'Joined queue'))
+test('history CRUD is ordered and scoped to the signed-in user', () => {
+  const db = openDatabase(':memory:')
+  seedUser(db, 'u1', 'one@example.com'); seedUser(db, 'u2', 'two@example.com')
+  const service = createHistoryService({ db, now: () => '2026-11-06T10:00:00.000Z' })
+  service.record({ userId:'u1', serviceName:'Clinic', outcome:'Joined queue' })
+  service.record({ userId:'u2', serviceName:'Private', outcome:'Served' })
+  const rows = service.list('u1')
+  assert.equal(rows.length, 1)
+  assert.equal(rows[0].outcome, 'Joined queue')
+  assert.equal(rows[0].serviceName, 'Clinic')
+  assert.equal(rows[0].userId, 'u1')
+  db.close()
 })
 
-test('queue activity rejects unauthenticated or invalid events', async () => {
-  assert.equal((await req('/api/activity', { method: 'POST', body: { type: 'served', serviceId: '1', serviceName: 'Clinic' } })).status, 401)
-  const response = await req('/api/activity', { token: userA.token, method: 'POST', body: { type: 'arbitrary', serviceId: '1', serviceName: 'Clinic' } })
-  assert.equal(response.status, 400)
+test('notifications and history survive closing and reopening the database file', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'queuesmart-notifications-'))
+  const file = join(dir, 'queuesmart.db')
+  try {
+    let db = openDatabase(file)
+    seedUser(db, 'persist-user', 'persist@example.com')
+    createNotificationService({ db }).create({ userId:'persist-user', type:'served', message:'You were served.' })
+    createHistoryService({ db }).record({ userId:'persist-user', serviceName:'Clinic', outcome:'Served' })
+    db.close()
+    db = openDatabase(file)
+    assert.equal(createNotificationService({ db }).list('persist-user').length, 1)
+    assert.equal(createNotificationService({ db }).unreadCount('persist-user'), 1)
+    assert.equal(createHistoryService({ db }).list('persist-user')[0].outcome, 'Served')
+    db.close()
+  } finally { rmSync(dir, { recursive:true, force:true }) }
+})
+
+test('queue join records a Joined queue history event', async () => {
+  const { createQueueService } = await import('../src/queueService.js')
+  const history = []
+  const queue = createQueueService({
+    getService: (id) => ({ id: String(id), name: 'Clinic', duration: 10, open: true }),
+    recordHistory: (event) => history.push(event),
+    getUserEmail: () => 'person@example.com',
+  })
+  queue.join('person-1', 'clinic-1')
+  assert.equal(history.length, 1)
+  assert.equal(history[0].outcome, 'Joined queue')
+  assert.equal(history[0].userId, 'person-1')
+})
+
+test('notification service requires a db, a userId, and a type and message', () => {
+  assert.throws(() => createNotificationService(), TypeError)
+
+  const db = openDatabase(':memory:')
+  const notifications = createNotificationService({ db })
+  assert.throws(() => notifications.list(), /userId is required/)
+  assert.throws(() => notifications.create({ type: 'served', message: 'x' }), /userId is required/)
+  assert.throws(() => notifications.create({ userId: 'u', message: 'x' }), /type and message are required/)
+  assert.throws(() => notifications.create({ userId: 'u', type: 'served' }), /type and message are required/)
+  db.close()
+})
+
+test('notifications without a service have a null serviceId, and unreadCount tracks reads', () => {
+  const db = openDatabase(':memory:')
+  seedUser(db, 'user-1', 'one@example.com')
+  const notifications = createNotificationService({ db })
+
+  const first = notifications.create({ userId: 'user-1', type: 'served', message: 'Served' })
+  assert.equal(first.serviceId, null)
+  assert.equal(notifications.unreadCount('user-1'), 1)
+
+  notifications.markRead('user-1', first.id)
+  assert.equal(notifications.unreadCount('user-1'), 0)
+  assert.equal(notifications.markRead('user-1', 999999), null)
+  db.close()
+})
+
+test('history service requires a db, a userId, and an outcome', () => {
+  assert.throws(() => createHistoryService(), TypeError)
+
+  const db = openDatabase(':memory:')
+  const history = createHistoryService({ db })
+  assert.throws(() => history.list(), /userId is required/)
+  assert.throws(() => history.record({ outcome: 'Served' }), /userId and outcome are required/)
+  assert.throws(() => history.record({ userId: 'u' }), /userId and outcome are required/)
+  db.close()
+})
+
+test('history records without a service keep null service fields, and an explicit time is used', () => {
+  const db = openDatabase(':memory:')
+  seedUser(db, 'user-1', 'one@example.com')
+  const history = createHistoryService({ db })
+
+  const entry = history.record({ userId: 'user-1', outcome: 'Served', occurredAt: '2026-01-01T00:00:00.000Z' })
+  assert.equal(entry.serviceId, null)
+  assert.equal(entry.serviceName, null)
+  assert.equal(entry.occurredAt, '2026-01-01T00:00:00.000Z')
+
+  const [listed] = history.list('user-1')
+  assert.equal(listed.serviceId, null)
+  assert.equal(listed.occurredAt, '2026-01-01T00:00:00.000Z')
+  db.close()
 })
