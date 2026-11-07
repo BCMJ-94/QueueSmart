@@ -4,32 +4,25 @@ import { AuthError } from './authService.js'
 import { requireAuthentication } from './authMiddleware.js'
 import { createNotificationService } from './notificationService.js'
 import { createHistoryService } from './historyService.js'
-import { openDatabase } from './db.js'
 import { createNotificationHistoryRoutes } from './notificationHistoryRoutes.js'
 import { QueueError } from './queueService.js'
 import { createQueueRoutes } from './queueRoutes.js'
-import { createServiceService } from './serviceService.js'
-import { createServiceRoutes } from './serviceRoutes.js'
+import { openDatabase } from './db.js'
 import { createProfileService } from './profileService.js'
+import { createServiceService } from './serviceService.js';
+import { createServiceRoutes } from './serviceRoutes.js';
 
 // Allows the front end when it is served from any localhost port
 // (VS Code Live Server, npx serve, etc.) plus an optional configured origin.
 const LOCAL_ORIGIN = /^http:\/\/(localhost|127\.0\.0\.1)(:\d+)?$/
 
-export function createApp({ authService, db, serviceService, queueService, frontendOrigin, notificationService, historyService } = {}) {
-  // Validate authentication before constructing dependent services so callers get
-  // the intended error even when no database was supplied.
+// db defaults to a fresh in-memory database (like createProfileService), so callers that only
+// need part of the app, such as the tests, don't have to open one. server.js always passes its own.
+export function createApp({ authService, db = openDatabase(':memory:'), serviceService = createServiceService(db), queueService, frontendOrigin, notificationService = createNotificationService({ db }), historyService = createHistoryService({ db }) } = {}) {
   if (!authService) {
     throw new Error('An authentication service is required.')
   }
 
-  // All database-backed modules in this app share one connection. Production passes
-  // its persistent connection; isolated tests can omit it and receive an in-memory DB.
-  const storageDb = db ?? openDatabase(':memory:')
-  serviceService ??= createServiceService(storageDb)
-  notificationService ??= createNotificationService({ db: storageDb })
-  historyService ??= createHistoryService({ db: storageDb })
-  const profileService = createProfileService({ db: storageDb })
   const app = express()
 
   app.use(cors({
@@ -48,6 +41,7 @@ export function createApp({ authService, db, serviceService, queueService, front
 
   // ---------- Authentication module ----------
   const requireAuth = requireAuthentication(authService)
+  const profileService = createProfileService({ db })
 
   app.post('/api/auth/register', async (request, response) => {
     response.status(201).json(await authService.register(request.body))

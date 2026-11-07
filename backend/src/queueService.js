@@ -1,14 +1,32 @@
 // backend/src/queueService.js
 //
-// Queue module: who is waiting for which service, in what order. In memory for now.
-// Every operation is synchronous (no await between a check and the change it guards).
+// Queue module backed by the Queue and QueueEntry tables in schema.sql (SQLite).
+// Every method is still synchronous (node:sqlite is synchronous), and every change that
+// touches more than one row runs inside transaction() from db.js, so it is saved whole or not at all.
 //
+// How the tables are used:
+//   Queue       one row per service, created the first time someone joins that service.
+//   QueueEntry  one row per visit. status is 'waiting' while the person is in line, then
+//               'served' (served by an administrator) or 'canceled' (left, or removed).
+//               Entries are never deleted, so the table keeps a record of every visit.
+//   position    1, 2, 3... among the WAITING entries of one queue. It is kept gap-free:
+//               when someone stops waiting, everyone behind them moves up by one.
 //
-//   getService(id)   -> { id, name, duration, open } or undefined if there is no such service.
-//                       `id` may be text (it comes from the URL), so the catalog decides how to match it.
-//   recordHistory({ userId, serviceId, outcome })
+// The service itself still comes from the services module, and history, emails and
+// notifications still come from the other modules, so they are passed in as functions:
+//
+//   db               an open database from openDatabase() in db.js
+//   getService(id)   -> { id, name, duration, status } (or { open: true/false } instead of status),
+//                       or undefined if there is no such service. `id` may be text (it comes from the URL).
+//   recordHistory({ userId, serviceId, serviceName, outcome })
 //                    -> stores a history entry. outcome is 'Served', 'Left queue' or 'Removed'.
 //   getUserEmail(userId) -> the user's email, or undefined
+//   notify({ userId, type, message, serviceId, serviceName })   (optional)
+//
+// History and notifications are written after the queue change has been saved, so a
+// failure in one of them can never undo a join, leave or serve.
+
+import { isUniqueViolation, transaction } from './db.js'
 
 export class QueueError extends Error {
   constructor(status, message, errors) {
@@ -18,10 +36,65 @@ export class QueueError extends Error {
   }
 }
 
-export function createQueueService({ getService, recordHistory, getUserEmail, notify = () => {} }) {
-  const queues = new Map()         // service.id -> [ { entryId, userId, joinedAt } ]  (index 0 = next up)
-  const queuedByUser = new Map()   // userId -> service.id  (one queue per user)
-  let nextEntryId = 1
+export function createQueueService({ db, getService, recordHistory, getUserEmail, notify = () => {} }) {
+  if (!db) {
+    throw new TypeError('A database connection is required.')
+  }
+
+  // ---------- SQL, prepared once ----------
+
+  const sql = {
+    queueIdFor: db.prepare('SELECT queue_id FROM Queue WHERE service_id = ?'),
+    createQueue: db.prepare('INSERT INTO Queue (service_id) VALUES (?)'),
+
+    waitingForUser: db.prepare(`
+      SELECT e.entry_id, e.position, q.queue_id, q.service_id
+      FROM QueueEntry e
+      JOIN Queue q ON q.queue_id = e.queue_id
+      WHERE e.user_id = ? AND e.status = 'waiting'
+    `),
+    waitingInQueue: db.prepare(`
+      SELECT entry_id, user_id, position, join_time
+      FROM QueueEntry
+      WHERE queue_id = ? AND status = 'waiting'
+      ORDER BY position
+    `),
+    firstWaiting: db.prepare(`
+      SELECT entry_id, user_id, position
+      FROM QueueEntry
+      WHERE queue_id = ? AND status = 'waiting'
+      ORDER BY position
+      LIMIT 1
+    `),
+    waitingEntry: db.prepare(`
+      SELECT entry_id, user_id, position
+      FROM QueueEntry
+      WHERE queue_id = ? AND entry_id = ? AND status = 'waiting'
+    `),
+    waitingAtPosition: db.prepare(`
+      SELECT entry_id, position
+      FROM QueueEntry
+      WHERE queue_id = ? AND position = ? AND status = 'waiting'
+    `),
+    nextPosition: db.prepare(`
+      SELECT COALESCE(MAX(position), 0) + 1 AS position
+      FROM QueueEntry
+      WHERE queue_id = ? AND status = 'waiting'
+    `),
+    countWaiting: db.prepare(`
+      SELECT COUNT(*) AS total FROM QueueEntry WHERE queue_id = ? AND status = 'waiting'
+    `),
+
+    addEntry: db.prepare('INSERT INTO QueueEntry (queue_id, user_id, position) VALUES (?, ?, ?)'),
+    setEntryStatus: db.prepare('UPDATE QueueEntry SET status = ? WHERE entry_id = ?'),
+    setEntryPosition: db.prepare('UPDATE QueueEntry SET position = ? WHERE entry_id = ?'),
+    moveEveryoneBehindUp: db.prepare(`
+      UPDATE QueueEntry SET position = position - 1
+      WHERE queue_id = ? AND status = 'waiting' AND position > ?
+    `),
+  }
+
+  // ---------- helpers ----------
 
   function requireService(id) {
     const service = getService(id)
@@ -29,100 +102,169 @@ export function createQueueService({ getService, recordHistory, getUserEmail, no
     return service
   }
 
-  const queueFor = (serviceId) => {
-    if (!queues.has(serviceId)) queues.set(serviceId, [])
-    return queues.get(serviceId)
+  // Works with either shape: { open: true } or { status: 'open' }
+  const isOpen = (service) => service.open ?? service.status === 'open'
+
+  // Service.service_id is TEXT, so ids are always handed to SQL as text
+  function queueIdFor(serviceId, { create = false } = {}) {
+    const key = String(serviceId)
+    const row = sql.queueIdFor.get(key)
+    if (row) return row.queue_id
+    return create ? Number(sql.createQueue.run(key).lastInsertRowid) : undefined
   }
 
-  function findEntry(serviceId, entryId) {
-    const queue = queueFor(serviceId)
-    const index = queue.findIndex((entry) => String(entry.entryId) === String(entryId))
-    if (index === -1) throw new QueueError(404, 'Queue entry not found.')
-    return { queue, index }
+  // Entry ids arrive as text from the URL; anything that is not a plain whole number cannot exist
+  function findWaitingEntry(queueId, entryId) {
+    const entry = queueId !== undefined && /^\d+$/.test(String(entryId))
+      ? sql.waitingEntry.get(queueId, Number(entryId))
+      : undefined
+    if (!entry) throw new QueueError(404, 'Queue entry not found.')
+    return entry
+  }
+
+  // Takes an entry out of the line and moves everyone behind it up by one
+  function closeEntry(queueId, entry, status) {
+    sql.setEntryStatus.run(status, entry.entry_id)
+    sql.moveEveryoneBehindUp.run(queueId, entry.position)
+  }
+
+  function nextInLine(service, userId) {
+    notify({
+      userId,
+      type: 'next_in_line',
+      message: `You're next in line for ${service.name}. Please get ready.`,
+      serviceId: service.id,
+      serviceName: service.name,
+    })
   }
 
   // ---------- user actions ----------
 
   function myQueue(userId) {
-    const serviceId = queuedByUser.get(userId)
-    if (serviceId === undefined) return { entry: null }
+    const row = sql.waitingForUser.get(userId)
+    if (!row) return { entry: null }
 
-    const service = requireService(serviceId)
-    const position = queueFor(serviceId).findIndex((entry) => entry.userId === userId) + 1
+    const service = requireService(row.service_id)
     return {
       entry: {
-        serviceId,
+        serviceId: service.id,
         serviceName: service.name,
-        position,                                         
-        estimatedWaitMinutes: position * service.duration,
-        status: position === 1 ? 'almost-ready' : 'waiting',
+        position: row.position,
+        estimatedWaitMinutes: row.position * service.duration,
+        status: row.position === 1 ? 'almost-ready' : 'waiting',
       },
     }
   }
 
   function join(userId, id) {
     const service = requireService(id)
-    if (!service.open) throw new QueueError(409, 'This queue is closed.')
-    if (queuedByUser.has(userId)) throw new QueueError(409, 'You are already in a queue.')
+    if (!isOpen(service)) throw new QueueError(409, 'This queue is closed.')
 
-    const entry = { entryId: nextEntryId++, userId, joinedAt: new Date().toISOString() }
-    queueFor(service.id).push(entry)
-    queuedByUser.set(userId, service.id)
+    transaction(db, () => {
+      if (sql.waitingForUser.get(userId)) throw new QueueError(409, 'You are already in a queue.')
+
+      const queueId = queueIdFor(service.id, { create: true })
+      const { position } = sql.nextPosition.get(queueId)
+      try {
+        sql.addEntry.run(queueId, userId, position)
+      } catch (error) {
+        // The one_waiting_entry_per_user index is the last line of defence
+        if (isUniqueViolation(error)) throw new QueueError(409, 'You are already in a queue.')
+        throw error
+      }
+    })
+
     const result = myQueue(userId)
     recordHistory({ userId, serviceId: service.id, serviceName: service.name, outcome: 'Joined queue' })
-    notify({ userId, type: 'queue_joined', message: `You joined ${service.name}. Your position is #${result.entry.position}.`, serviceId: service.id, serviceName: service.name })
-    if (result.entry.position === 1) notify({ userId, type: 'next_in_line', message: `You're next in line for ${service.name}. Please get ready.`, serviceId: service.id, serviceName: service.name })
+    notify({
+      userId,
+      type: 'queue_joined',
+      message: `You joined ${service.name}. Your position is #${result.entry.position}.`,
+      serviceId: service.id,
+      serviceName: service.name,
+    })
+    if (result.entry.position === 1) nextInLine(service, userId)
     return result
   }
 
   function leave(userId) {
-    const serviceId = queuedByUser.get(userId)
-    if (serviceId === undefined) throw new QueueError(409, 'You are not in a queue.')
+    let row
+    let next
+    transaction(db, () => {
+      row = sql.waitingForUser.get(userId)
+      if (!row) throw new QueueError(409, 'You are not in a queue.')
 
-    const queue = queueFor(serviceId)
-    const oldPosition = queue.findIndex((entry) => entry.userId === userId)
-    queue.splice(oldPosition, 1)
-    queuedByUser.delete(userId)
-    const service = getService(serviceId)
-    if (oldPosition === 0 && queue[0]) notify({ userId: queue[0].userId, type: 'next_in_line', message: `You're next in line for ${service.name}. Please get ready.`, serviceId: service.id, serviceName: service.name })
-    recordHistory({ userId, serviceId, serviceName: service?.name ?? null, outcome: 'Left queue' })
+      closeEntry(row.queue_id, row, 'canceled')
+      if (row.position === 1) next = sql.firstWaiting.get(row.queue_id)
+    })
+
+    const service = getService(row.service_id)
+    if (next && service) nextInLine(service, next.user_id)
+    recordHistory({ userId, serviceId: service?.id ?? row.service_id, serviceName: service?.name ?? null, outcome: 'Left queue' })
   }
 
   // ---------- administrator actions ----------
 
   function list(id) {
     const service = requireService(id)
-    return queueFor(service.id).map((entry, index) => ({
-      entryId: entry.entryId,
-      userId: entry.userId,
-      email: getUserEmail(entry.userId) ?? 'unknown',
-      position: index + 1,
-      joinedAt: entry.joinedAt,
+    const queueId = queueIdFor(service.id)
+    if (queueId === undefined) return []
+
+    return sql.waitingInQueue.all(queueId).map((entry) => ({
+      entryId: entry.entry_id,
+      userId: entry.user_id,
+      email: getUserEmail(entry.user_id) ?? 'unknown',
+      position: entry.position,
+      joinedAt: entry.join_time,
     }))
   }
 
   function serveNext(id) {
     const service = requireService(id)
-    const entry = queueFor(service.id).shift()
-    if (!entry) throw new QueueError(409, 'The queue is empty.')
+    let served
+    let next
+    transaction(db, () => {
+      const queueId = queueIdFor(service.id)
+      served = queueId === undefined ? undefined : sql.firstWaiting.get(queueId)
+      if (!served) throw new QueueError(409, 'The queue is empty.')
 
-    queuedByUser.delete(entry.userId)
-    recordHistory({ userId: entry.userId, serviceId: service.id, serviceName: service.name, outcome: 'Served' })
-    notify({ userId: entry.userId, type: 'served', message: `You've been served at ${service.name}.`, serviceId: service.id, serviceName: service.name })
-    const next = queueFor(service.id)[0]
-    if (next) notify({ userId: next.userId, type: 'next_in_line', message: `You're next in line for ${service.name}. Please get ready.`, serviceId: service.id, serviceName: service.name })
-    return { served: { entryId: entry.entryId, userId: entry.userId } }
+      closeEntry(queueId, served, 'served')
+      next = sql.firstWaiting.get(queueId)
+    })
+
+    recordHistory({ userId: served.user_id, serviceId: service.id, serviceName: service.name, outcome: 'Served' })
+    notify({
+      userId: served.user_id,
+      type: 'served',
+      message: `You've been served at ${service.name}.`,
+      serviceId: service.id,
+      serviceName: service.name,
+    })
+    if (next) nextInLine(service, next.user_id)
+    return { served: { entryId: served.entry_id, userId: served.user_id } }
   }
 
   function remove(id, entryId) {
     const service = requireService(id)
-    const { queue, index } = findEntry(service.id, entryId)
-    const [entry] = queue.splice(index, 1)
+    let removed
+    let next
+    transaction(db, () => {
+      const queueId = queueIdFor(service.id)
+      removed = findWaitingEntry(queueId, entryId)
 
-    queuedByUser.delete(entry.userId)
-    recordHistory({ userId: entry.userId, serviceId: service.id, serviceName: service.name, outcome: 'Removed' })
-    notify({ userId: entry.userId, type: 'removed', message: `You were removed from ${service.name}.`, serviceId: service.id, serviceName: service.name })
-    if (index === 0 && queue[0]) notify({ userId: queue[0].userId, type: 'next_in_line', message: `You're next in line for ${service.name}. Please get ready.`, serviceId: service.id, serviceName: service.name })
+      closeEntry(queueId, removed, 'canceled')
+      if (removed.position === 1) next = sql.firstWaiting.get(queueId)
+    })
+
+    recordHistory({ userId: removed.user_id, serviceId: service.id, serviceName: service.name, outcome: 'Removed' })
+    notify({
+      userId: removed.user_id,
+      type: 'removed',
+      message: `You were removed from ${service.name}.`,
+      serviceId: service.id,
+      serviceName: service.name,
+    })
+    if (next) nextInLine(service, next.user_id)
   }
 
   // Relative moves ("up one") stay correct even if another admin changed the list meanwhile
@@ -131,12 +273,18 @@ export function createQueueService({ getService, recordHistory, getUserEmail, no
       throw new QueueError(400, 'Check the move and try again.', { direction: 'Direction must be up or down.' })
     }
     const service = requireService(id)
-    const { queue, index } = findEntry(service.id, entryId)
-    const target = direction === 'up' ? index - 1 : index + 1
-    if (target < 0 || target >= queue.length) {
-      throw new QueueError(409, `Already ${direction === 'up' ? 'first' : 'last'} in the queue.`)
-    }
-    ;[queue[index], queue[target]] = [queue[target], queue[index]]
+
+    transaction(db, () => {
+      const queueId = queueIdFor(service.id)
+      const entry = findWaitingEntry(queueId, entryId)
+      const neighbour = sql.waitingAtPosition.get(queueId, direction === 'up' ? entry.position - 1 : entry.position + 1)
+      if (!neighbour) {
+        throw new QueueError(409, `Already ${direction === 'up' ? 'first' : 'last'} in the queue.`)
+      }
+
+      sql.setEntryPosition.run(neighbour.position, entry.entry_id)
+      sql.setEntryPosition.run(entry.position, neighbour.entry_id)
+    })
     return list(service.id)
   }
 
@@ -145,7 +293,8 @@ export function createQueueService({ getService, recordHistory, getUserEmail, no
     list, serveNext, remove, move,
     queueLength: (id) => {
       const service = getService(id)
-      return service ? queueFor(service.id).length : 0
+      const queueId = service ? queueIdFor(service.id) : undefined
+      return queueId === undefined ? 0 : sql.countWaiting.get(queueId).total
     },
   }
 }

@@ -32,7 +32,7 @@ test('accounts and profiles survive closing and reopening the database file', as
     assert.equal(createProfileService({ db: secondDb }).get('kai@example.com').fullName, 'Kai Lee')
     secondDb.close()
   } finally {
-    rmSync(dir, { recursive: true, force: true })
+    rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 })
   }
 })
 

@@ -18,6 +18,7 @@ const emails = new Map()   // user id -> email
 const history = []
 
 const queueService = createQueueService({
+  db,
   getService: (id) => {
     const service = serviceService.getById(id)
     if (!service) {return undefined}

@@ -58,21 +58,33 @@ test('notifications and history survive closing and reopening the database file'
     assert.equal(createNotificationService({ db }).unreadCount('persist-user'), 1)
     assert.equal(createHistoryService({ db }).list('persist-user')[0].outcome, 'Served')
     db.close()
-  } finally { rmSync(dir, { recursive:true, force:true }) }
+  } finally { rmSync(dir, { recursive: true, force: true, maxRetries: 5, retryDelay: 100 }) }
 })
 
-test('queue join records a Joined queue history event', async () => {
+test('queue join records a Joined queue history event and sends a notification, and leaving records Left queue', async () => {
   const { createQueueService } = await import('../src/queueService.js')
-  const history = []
+  const db = openDatabase(':memory:')
+  seedUser(db, 'person-1', 'person@example.com')
+  db.prepare(`INSERT INTO Service (service_id, name, description, duration, priority, status)
+    VALUES ('clinic-1', 'Clinic', 'test service', 10, 'medium', 'open')`).run()
+  const notifications = createNotificationService({ db })
+  const history = createHistoryService({ db })
   const queue = createQueueService({
+    db,
     getService: (id) => ({ id: String(id), name: 'Clinic', duration: 10, open: true }),
-    recordHistory: (event) => history.push(event),
+    recordHistory: (event) => history.record(event),
     getUserEmail: () => 'person@example.com',
+    notify: (event) => notifications.create(event),
   })
+
   queue.join('person-1', 'clinic-1')
-  assert.equal(history.length, 1)
-  assert.equal(history[0].outcome, 'Joined queue')
-  assert.equal(history[0].userId, 'person-1')
+  assert.ok(notifications.list('person-1').some((item) => item.type === 'queue_joined'))
+  assert.equal(history.list('person-1')[0].outcome, 'Joined queue')
+
+  queue.leave('person-1')
+  assert.equal(history.list('person-1')[0].outcome, 'Left queue')
+  assert.equal(history.list('person-1').length, 2)
+  db.close()
 })
 
 test('notification service requires a db, a userId, and a type and message', () => {

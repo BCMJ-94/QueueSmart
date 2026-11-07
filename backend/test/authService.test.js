@@ -86,5 +86,5 @@ test('getUserById returns the public user, or null when unknown', async () => {
   const { user } = await auth.register({ email: 'lookup@example.com', password: 'valid-password' })
 
   assert.deepEqual(auth.getUserById(user.id), user)
-  assert.equal(auth.getUserById('no-such-user'), null)
+  assert.ok(auth.getUserById('no-such-user') == null)
 })

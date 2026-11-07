@@ -1,10 +1,20 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import { QueueError, createQueueService } from '../src/queueService.js'
+import { openDatabase } from '../src/db.js'
 
-// The queue service gets its collaborators as plain functions, so the tests use
-// small fakes: no catalog, auth service or HTTP server is involved.
+// The queue lives in SQLite, so each test gets a fresh in-memory database. The catalog, history
+// and email lookup are still small fakes: no auth service or HTTP server is involved. The Service
+// and UserCredentials rows exist only to satisfy the Queue and QueueEntry foreign keys.
 function setup() {
+  const db = openDatabase(':memory:')
+  const addService = db.prepare(`INSERT INTO Service (service_id, name, description, duration, priority, status)
+    VALUES (?, ?, 'test service', 10, 'medium', 'open')`)
+  for (const [id, name] of [['1', 'General Consultation'], ['2', 'Urgent Care'], ['3', 'Music Lesson']]) addService.run(id, name)
+  const addUser = db.prepare(`INSERT INTO UserCredentials (user_id, email, password_salt, password_hash)
+    VALUES (?, ?, 'salt', 'hash')`)
+  for (const id of ['ava', 'ben', 'cleo', 'mystery']) addUser.run(id, `${id}-login@example.com`)
+
   const catalog = new Map([
     ['1', { id: 1, name: 'General Consultation', duration: 15, open: true }],
     ['2', { id: 2, name: 'Urgent Care', duration: 10, open: true }],
@@ -14,6 +24,7 @@ function setup() {
   const history = []
 
   const queue = createQueueService({
+    db,
     getService: (id) => catalog.get(String(id)),   // like the real catalog: text ids from URLs work too
     recordHistory: (event) => history.push(event),
     getUserEmail: (userId) => emails.get(userId),

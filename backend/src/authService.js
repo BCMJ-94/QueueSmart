@@ -4,10 +4,14 @@ import {
   timingSafeEqual,
 } from 'node:crypto'
 import { promisify } from 'node:util'
+import { isUniqueViolation } from './db.js'
 import { validateLogin, validateRegistration } from './validation.js'
 
 // Authentication module: registration, login, and role handling.
-// Users and sessions live in memory (no database until Assignment 4).
+// Sessions always live in memory. Accounts live in memory too, unless a database is passed
+// to createAuthService({ db }): then they are stored in the UserCredentials table (the
+// queue, history and notification tables point at it), loaded when the service starts,
+// and every new account is saved there.
 
 const scrypt = promisify(scryptCallback)
 const KEY_LENGTH = 64
@@ -36,8 +40,14 @@ export function createAuthService({ db } = {}) {
   const usersByEmail = new Map()
   const usersById = new Map()
   const sessions = new Map()   // token -> user id
+
+  const insertUser = db?.prepare(`
+    INSERT INTO UserCredentials (user_id, email, password_salt, password_hash, role)
+    VALUES (?, ?, ?, ?, ?)
+  `)
   if (db) {
-    for (const row of db.prepare('SELECT user_id, email, role, password_salt, password_hash FROM UserCredentials').all()) {
+    const rows = db.prepare('SELECT user_id, email, password_salt, password_hash, role FROM UserCredentials').all()
+    for (const row of rows) {
       const user = { id: row.user_id, email: row.email, role: row.role, salt: row.password_salt, passwordHash: row.password_hash }
       usersByEmail.set(user.email, user)
       usersById.set(user.id, user)
@@ -63,13 +73,20 @@ export function createAuthService({ db } = {}) {
       passwordHash: await hashPassword(password, salt),
     }
 
-    if (db) {
-      db.prepare(`INSERT INTO UserCredentials (user_id, email, password_salt, password_hash, role)
-        VALUES (?, ?, ?, ?, ?)`).run(user.id, user.email, user.salt, user.passwordHash, user.role)
-      if (typeof fullName === 'string' && fullName.trim()) {
-        db.prepare('INSERT INTO UserProfile (email, full_name) VALUES (?, ?)').run(user.email, fullName.trim())
+    if (insertUser) {
+      try {
+        insertUser.run(user.id, user.email, user.salt, user.passwordHash, user.role)
+        // A full name given at sign-up creates the profile row right away
+        if (typeof fullName === 'string' && fullName.trim()) {
+          db.prepare('INSERT INTO UserProfile (email, full_name) VALUES (?, ?)').run(user.email, fullName.trim())
+        }
+      } catch (error) {
+        // The database is the final judge of "email already taken", even for two sign-ups at once
+        if (isUniqueViolation(error)) throw new AuthError(409, 'An account with this email already exists.')
+        throw error
       }
     }
+
     usersByEmail.set(user.email, user)
     usersById.set(user.id, user)
     return user
@@ -112,15 +129,16 @@ export function createAuthService({ db } = {}) {
       return createSession(user)
     },
 
-    getUserById(id) {
-      const user = usersById.get(id)
-      return user ? publicUser(user) : null
-    },
-
     getUserForToken(token) {
       const userId = sessions.get(token)
       const user = userId ? usersById.get(userId) : undefined
       return user ? publicUser(user) : null
+    },
+
+    // Used by other modules (for example the queue list) to show who a user id belongs to
+    getUserById(id) {
+      const user = usersById.get(id)
+      return user ? publicUser(user) : undefined
     },
 
     revokeToken(token) {
