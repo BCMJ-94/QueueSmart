@@ -60,15 +60,6 @@ export function createApp({ authService, db = openDatabase(':memory:'), serviceS
     response.status(204).end()
   })
 
-  // ---------- Profile module ----------
-  app.get('/api/profile', requireAuth, (request, response) => {
-    response.json({ profile: profileService.get(request.user.email) })
-  })
-
-  app.put('/api/profile', requireAuth, (request, response) => {
-    response.json({ profile: profileService.update(request.user.email, request.body) })
-  })
-
   // --------- Service Module --------
   app.use(
     '/api/services',
