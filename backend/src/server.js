@@ -23,7 +23,8 @@ if (adminEmail && adminPassword && !authService.getUserForEmail?.(adminEmail)) {
 }
 
 const queueService = createQueueService({
-  getService: (id) => { try { const service = serviceService.getById(id); return service ? { ...service, open: service.status === 'open' } : undefined } catch { return undefined } },
+  db,
+  getService: (id) => serviceService.getById(id) ?? undefined,
   recordHistory: (event) => historyService.record(event),
   getUserEmail: (userId) => authService.getUserById(userId)?.email,
   notify: (event) => notificationService.create(event),
