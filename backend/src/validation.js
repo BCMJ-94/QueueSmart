@@ -103,3 +103,12 @@ export function validateLogin(input) {
     password: { label: 'Password', required: true, type: 'string', maxLength: 128 },
   })
 }
+
+// Profile fields: a full name is required; phone and preferences are optional.
+export function validateProfile(input) {
+  return validateFields(input, {
+    fullName: { label: 'Full name', required: true, type: 'string', minLength: 1, maxLength: 100 },
+    phone: { label: 'Phone', type: 'string', maxLength: 20, pattern: /^(?:\+?[0-9() .-]{7,20})?$/, patternMessage: 'Enter a valid phone number.' },
+    preferences: { label: 'Preferences', type: 'string', maxLength: 500 },
+  })
+}

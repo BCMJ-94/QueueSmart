@@ -125,7 +125,9 @@ test('leave removes the user, moves everyone behind them up, and records history
   assert.deepEqual(positions(queue, 1), ['ava:1', 'cleo:2'])
   assert.equal(queue.myQueue('cleo').entry.position, 2)
   assert.deepEqual(queue.myQueue('ben'), { entry: null })
-  assert.deepEqual(history, [{ userId: 'ben', serviceId: 1, outcome: 'Left queue' }])
+  assert.deepEqual(history.map((event) => `${event.userId}:${event.outcome}`), [
+    'ava:Joined queue', 'ben:Joined queue', 'cleo:Joined queue', 'ben:Left queue',
+  ])
 })
 
 test('someone who left can join again, at the back', () => {
@@ -162,7 +164,9 @@ test('serveNext serves the first person, records history, and moves the next per
   const { served } = queue.serveNext(1)
 
   assert.equal(served.userId, 'ava')
-  assert.deepEqual(history, [{ userId: 'ava', serviceId: 1, outcome: 'Served' }])
+  assert.deepEqual(history.map((event) => `${event.userId}:${event.outcome}`), [
+    'ava:Joined queue', 'ben:Joined queue', 'ava:Served',
+  ])
   assert.deepEqual(queue.myQueue('ava'), { entry: null })
   assert.equal(queue.myQueue('ben').entry.position, 1)
   assert.equal(queue.myQueue('ben').entry.status, 'almost-ready')
@@ -258,7 +262,9 @@ test('remove takes a person out of the middle, shifts the rest up, and records "
 
   assert.deepEqual(positions(queue, 1), ['ava:1', 'cleo:2'])
   assert.deepEqual(queue.myQueue('ben'), { entry: null })
-  assert.deepEqual(history, [{ userId: 'ben', serviceId: 1, outcome: 'Removed' }])
+  assert.deepEqual(history.map((event) => `${event.userId}:${event.outcome}`), [
+    'ava:Joined queue', 'ben:Joined queue', 'cleo:Joined queue', 'ben:Removed',
+  ])
 })
 
 test('remove accepts the entry id as text, and the removed user can join again', () => {
@@ -281,7 +287,8 @@ test('remove returns 404 for an unknown entry, an unknown service, or an entry f
   assert.throws(() => queue.remove(99, entryId), isQueueError(404))
   assert.throws(() => queue.remove(2, entryId), isQueueError(404))   // right id, wrong queue
   assert.equal(queue.queueLength(1), 1)
-  assert.equal(history.length, 0)
+  assert.equal(history.length, 1)
+  assert.equal(history[0].outcome, 'Joined queue')
 })
 
 test('an entry cannot be removed twice', () => {
@@ -403,6 +410,7 @@ test('a full session: join, reorder, remove, serve and leave leave the queue con
 
   assert.equal(queue.queueLength(1), 0)
   assert.deepEqual(history.map((event) => `${event.userId}:${event.outcome}`), [
+    'ava:Joined queue', 'ben:Joined queue', 'cleo:Joined queue',
     'ben:Removed', 'ava:Served', 'cleo:Left queue',
   ])
   for (const userId of ['ava', 'ben', 'cleo']) {

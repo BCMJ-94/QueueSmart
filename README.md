@@ -1,2 +1,54 @@
-**COSC 4353 Project**
-Okay for the QueueSmart system, I put the front end html in a folder. I need to delete the original one but was going to do it once the TA sees that everyone contributed towards it
+# QueueSmart — COSC 4353 Project
+
+QueueSmart is a queue-management web application with user registration/login, administrator service management, queue operations, notifications, and user queue history.
+
+## Member 4: Notifications, History, and Integration
+
+- Notifications are stored in SQLite `Notification` rows, scoped by `user_id`.
+- Notification status is `sent` until marked read, then `viewed`.
+- Queue activity is stored in SQLite `History` rows with user, service, outcome, and timestamp.
+- Notification and history records survive API server restarts because they use the same persistent database file as the rest of the backend.
+- The notification panel and User History screen load their data from `/api/notifications` and `/api/history`.
+- Queue join, leave, serve, remove, and next-in-line events use the shared notification/history services.
+
+## Run locally
+
+Requirements: Node.js 22.13+ (Node's built-in `node:sqlite` is used).
+
+```bash
+cd backend
+npm ci
+cp .env.example .env
+# Set ADMIN_EMAIL and ADMIN_PASSWORD in backend/.env
+npm run dev
+```
+
+In another terminal:
+
+```bash
+cd frontend
+npx serve -l 5500
+```
+
+Open `http://localhost:5500`. The API runs on `http://localhost:3001` by default. The SQLite database is created at `backend/data/queuesmart.db`; do not commit the database or `.env` file.
+
+## Tests and coverage
+
+```bash
+cd backend
+npm test
+npm run test:coverage
+```
+
+The notification/history tests use temporary SQLite databases and verify user isolation, read/viewed status, and persistence after closing and reopening the database.
+
+## API endpoints
+
+| Method | Endpoint | Description |
+|---|---|---|
+| GET | `/api/notifications` | List current user's notifications and unread count |
+| PATCH | `/api/notifications/:id/read` | Mark one notification as viewed |
+| PATCH | `/api/notifications/read-all` | Mark all current user's notifications as viewed |
+| GET | `/api/history` | List current user's queue history |
+
+All four endpoints require a valid bearer token. Never accept a `user_id` from the browser to determine ownership; the API uses the authenticated user's ID.

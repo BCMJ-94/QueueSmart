@@ -70,7 +70,7 @@ test('validateProfile checks types and length limits', () => {
 
 const db = openDatabase(':memory:')
 const authService = createAuthService({ db })
-const app = createApp({ authService })   // uses the default profile service on the same database
+const app = createApp({ authService, db })   // profile and authentication share the same database
 let server
 let baseUrl
 

@@ -112,3 +112,16 @@ test('returned objects cannot mutate stored services', () => {
   listed[0].name = 'Also Tampered'
   assert.equal(serviceService.getById(service.id).name, 'Passport Service')
 })
+
+test('createServiceService requires a database connection', () => {
+  assert.throws(() => createServiceService(), TypeError)
+})
+
+test('update with no editable fields returns the service unchanged', () => {
+  const serviceService = createTestServiceService()
+  const created = serviceService.create(validService())
+
+  assert.deepEqual(serviceService.update(created.id, {}), created)
+  assert.deepEqual(serviceService.update(created.id, { name: undefined }), created)
+  assert.deepEqual(serviceService.update(created.id, { notEditable: 'x' }), created)
+})

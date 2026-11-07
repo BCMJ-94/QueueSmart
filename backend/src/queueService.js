@@ -69,6 +69,7 @@ export function createQueueService({ getService, recordHistory, getUserEmail, no
     queueFor(service.id).push(entry)
     queuedByUser.set(userId, service.id)
     const result = myQueue(userId)
+    recordHistory({ userId, serviceId: service.id, serviceName: service.name, outcome: 'Joined queue' })
     notify({ userId, type: 'queue_joined', message: `You joined ${service.name}. Your position is #${result.entry.position}.`, serviceId: service.id, serviceName: service.name })
     if (result.entry.position === 1) notify({ userId, type: 'next_in_line', message: `You're next in line for ${service.name}. Please get ready.`, serviceId: service.id, serviceName: service.name })
     return result

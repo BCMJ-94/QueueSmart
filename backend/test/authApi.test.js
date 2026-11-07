@@ -3,11 +3,13 @@ import { after, before, test } from 'node:test'
 import express from 'express'
 import { createApp } from '../src/app.js'
 import { createAuthService } from '../src/authService.js'
+import { openDatabase } from '../src/db.js'
 import { requireAdministrator, requireAuthentication } from '../src/authMiddleware.js'
 
 // Real HTTP requests against the app running on a random local port
-const authService = createAuthService()
-const app = createApp({ authService, frontendOrigin: 'https://queuesmart.example' })
+const db = openDatabase(':memory:')
+const authService = createAuthService({ db })
+const app = createApp({ authService, db, frontendOrigin: 'https://queuesmart.example' })
 
 // A small admin-only route, the way other modules will use the role middleware
 const requireAuth = requireAuthentication(authService)
