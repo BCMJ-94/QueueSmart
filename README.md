@@ -2,15 +2,6 @@
 
 QueueSmart is a queue-management web application with user registration/login, administrator service management, queue operations, notifications, and user queue history.
 
-## Member 4: Notifications, History, and Integration
-
-- Notifications are stored in SQLite `Notification` rows, scoped by `user_id`.
-- Notification status is `sent` until marked read, then `viewed`.
-- Queue activity is stored in SQLite `History` rows with user, service, outcome, and timestamp.
-- Notification and history records survive API server restarts because they use the same persistent database file as the rest of the backend.
-- The notification panel and User History screen load their data from `/api/notifications` and `/api/history`.
-- Queue join, leave, serve, remove, and next-in-line events use the shared notification/history services.
-
 ## Run locally
 
 Requirements: Node.js 22.13+ (Node's built-in `node:sqlite` is used).
